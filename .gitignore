@@ -1,0 +1,28 @@
+# Nix
+.direnv/
+result
+result-*
+
+# Node/Bun
+node_modules/
+.bun/
+
+# Environment
+.env
+.env.local
+
+# Data
+data/
+cookies.json
+pgdata/
+
+# Logs
+logs/
+*.log
+
+# n8n
+n8n/
+.n8n/
+
+# OS
+.DS_Store

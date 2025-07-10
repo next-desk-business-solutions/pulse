@@ -1,0 +1,89 @@
+#+TITLE: 3-Phase Lead Warmer Workflow Plan
+#+AUTHOR: Melbourne Baldove
+#+DATE: 2025-07-10
+#+PROPERTY: header-args :tangle yes
+
+* OVERVIEW
+This document outlines the plan for creating a 3-phase lead warmer workflow using n8n and Puppeteer. The goal is to automate initial outreach on LinkedIn and create tasks in Linear for human follow-up.
+
+* LOGIC SEPARATION: SCRIPT VS. N8N
+- *Puppeteer Scripts*: Scripts are responsible *only* for browser interaction and data extraction (e.g., viewing a page, liking a post, scraping text). They should contain no business logic.
+- *n8n Workflow*: n8n is responsible for all orchestration and business logic. This includes calling scripts, handling errors, calling external APIs (LLM, Linear, CRM), and managing the state in the database.
+
+* KEY COMPONENTS
+- *n8n*: Workflow orchestrator.
+- *Puppeteer*: Headless browser for LinkedIn automation.
+- *LLM (OpenAI/Gemini)*: For generating personalized content.
+- *Linear*: Task management for human intervention.
+- *PostgreSQL*: Persistent data store for lead state management.
+- *Twenty CRM*: The customer relationship management software (self-hosted).
+
+* ENVIRONMENT VARIABLES
+#+BEGIN_SRC shell
+# LinkedIn Credentials
+LINKEDIN_EMAIL="your_linkedin_email@example.com"
+LINKEDIN_PASSWORD="your_linkedin_password"
+
+# API Keys & URLs
+LINEAR_API_KEY="your_linear_api_key"
+OPENAI_API_KEY="your_openai_api_key"
+TWENTY_API_KEY="your_twenty_crm_api_key" # API Key for Twenty CRM
+TWENTY_INSTANCE_URL="http://localhost:4120" # URL for your self-hosted Twenty CRM instance
+
+# Database Credentials
+DB_HOST="localhost"
+DB_USER="n8n_user"
+DB_PASSWORD="db_password"
+DB_NAME="lead_warmer_db"
+DB_PORT="5432"
+
+# Workflow Configuration
+PHASE_1_TO_2_DELAY_DAYS="1"
+PHASE_2_TO_3_DELAY_DAYS="2"
+#+END_SRC
+
+* SHARED LOGIC: LINKEDIN LOGIN & SESSION HANDLING
+**Required Script 0: `login.js`**
+- *Function*: Logs into LinkedIn and saves the session cookies to a shared file (e.g., `/data/cookies.json`).
+- *Execution*: This script runs once at the beginning of the workflow and is re-run if any other script detects an expired session.
+
+**Cookie Expiration Handling:**
+Each action script must verify that the session is active. If it detects a redirect to the login page, it will signal an error, prompting the n8n workflow to re-run `login.js`.
+
+* PHASE 1: Profile View
+**Objective:** Make initial, subtle contact by viewing the lead's profile and gathering basic information.
+**Actions (n8n Workflow):**
+1. Trigger workflow with a lead's LinkedIn profile URL.
+2. Execute `view-profile.js` to get the lead's name.
+3. Create a record for the lead in the internal PostgreSQL database.
+4. **Call Twenty CRM API** to create or update the lead with a "Viewed Profile" status.
+5. Update the lead's state in the internal database and schedule the next phase.
+
+**Required Script 1: `view-profile.js`**
+- *Function*: Visits a specified profile URL using a pre-existing login session and extracts the lead's full name.
+- *Input*: `profileUrl` (string)
+- *Output*: JSON object `{ "status": "success", "viewedProfile": profileUrl, "fullName": "Lead's Full Name" }` or `{ "status": "error", ... }`.
+
+* PHASE 2: Engage with recent post
+**Objective:** Engage with the lead's most recent post by liking it, generating a comment with an LLM, and creating a Linear task for a human to review and post the comment.
+**Actions (n8n Workflow):**
+1. Resume workflow for a lead ready for Phase 2.
+2. Execute `engage-with-post.js` to get post content.
+3. Call LLM API to generate a personalized comment.
+4. Create a task in Linear for a human to review and post the comment.
+5. **Call Twenty CRM API** to update the lead with an "Engaged with Post" status and log the activity.
+6. Update the lead's state in the internal database and schedule the final phase.
+
+**Required Script 2: `engage-with-post.js`**
+- *Function*: Navigates to a profile, finds the most recent post, extracts its content, likes it, and returns its URL and content.
+- *Input*: `profileUrl` (string)
+- *Output*: JSON object `{ "status": "success", "likedPostUrl": "...", "postContent": "..." }` or `{ "status": "error", ... }`.
+
+* PHASE 3: Create Connection Request Task
+**Objective:** Create a Linear task for a human to send a personalized connection request using data already stored.
+**Actions (n8n Workflow):**
+1. Resume workflow for a lead ready for Phase 3.
+2. Read the lead's data (name, profile URL) from the internal PostgreSQL database.
+3. Create a task in Linear with a pre-filled, personalized message.
+4. **Call Twenty CRM API** to update the lead with a "Connection Task Created" status.
+5. Update the lead's state in the internal database to 'completed'.

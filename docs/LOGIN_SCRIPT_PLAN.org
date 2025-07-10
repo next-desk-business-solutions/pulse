@@ -1,0 +1,126 @@
+#+TITLE: LinkedIn Login Script Implementation Plan
+#+AUTHOR: Melbourne Baldove
+#+DATE: 2025-07-10
+#+PROPERTY: header-args :tangle yes
+
+* OVERVIEW
+This document outlines the implementation plan for the LinkedIn login script (`login.js`) that serves as the foundation for all LinkedIn automation in the lead warmer workflow.
+
+* SCRIPT PURPOSE
+- *Primary Function*: Authenticate with LinkedIn and establish a persistent session
+- *Session Management*: Save cookies to shared storage for reuse by other scripts
+- *Error Handling*: Detect and handle various authentication scenarios
+- *Integration Point*: Called by n8n workflow when session initialization or refresh is needed
+
+* TECHNICAL REQUIREMENTS
+
+** Dependencies
+- *Puppeteer*: For browser automation
+- *fs/promises*: For file system operations (cookie storage)
+- *path*: For file path resolution
+
+** Input Parameters
+- No direct parameters (uses environment variables)
+- Reads from environment:
+  - `LINKEDIN_EMAIL`: LinkedIn account email
+  - `LINKEDIN_PASSWORD`: LinkedIn account password
+
+** Output Format
+#+BEGIN_SRC json
+{
+  "status": "success" | "error",
+  "message": "Descriptive message",
+  "sessionValid": true | false,
+  "cookiesPath": "/data/cookies.json"
+}
+#+END_SRC
+
+* IMPLEMENTATION DETAILS
+
+** Cookie Storage Strategy
+- *File Location*: `/data/cookies.json`
+- *Format*: JSON array of cookie objects from Puppeteer
+- *Permissions*: Ensure file is readable by other scripts
+- *Cleanup*: Remove expired or invalid cookies
+
+** Authentication Flow
+1. Launch headless browser
+2. Navigate to LinkedIn login page
+3. Fill credentials from environment variables
+4. Handle potential 2FA or security challenges
+5. Verify successful login (check for dashboard/feed)
+6. Extract and save session cookies
+7. Validate session by navigating to a protected page
+
+** Error Scenarios to Handle
+- *Invalid Credentials*: Wrong email/password
+- *Account Locked*: Too many failed attempts
+- *2FA Required*: Two-factor authentication prompt
+- *Security Challenge*: CAPTCHA or email verification
+- *Network Issues*: Connection timeouts or failures
+- *Rate Limiting*: LinkedIn blocking automated requests
+
+** Session Validation
+- Check for presence of authentication cookies
+- Verify cookies haven't expired
+- Test access to protected LinkedIn pages
+- Handle graceful degradation when session expires
+
+* SECURITY CONSIDERATIONS
+- *Credential Protection*: Never log passwords or sensitive data
+- *Cookie Security*: Store cookies with appropriate permissions
+- *Browser Fingerprinting*: Use realistic browser settings
+- *Rate Limiting*: Implement delays to avoid detection
+- *User Agent*: Use current, realistic user agent strings
+
+* INTEGRATION WITH N8N WORKFLOW
+
+** When to Call Login Script
+- At workflow initialization
+- When any script reports session expiration
+- After defined time intervals (e.g., daily refresh)
+- When authentication errors are detected
+
+** Error Propagation
+- Return structured error responses
+- Include actionable error messages
+- Log appropriate details for debugging
+- Signal need for manual intervention when required
+
+** Retry Logic
+- Implement exponential backoff for transient failures
+- Maximum retry attempts (3-5 attempts)
+- Different retry strategies for different error types
+- Escalate to human intervention after max retries
+
+* FILE STRUCTURE
+#+BEGIN_SRC
+scripts/
+├── login.js              # Main login script
+├── utils/
+│   ├── browser-config.js # Browser configuration
+│   ├── cookie-manager.js # Cookie handling utilities
+│   └── error-handler.js  # Error handling utilities
+└── data/
+    └── cookies.json      # Session cookies storage
+#+END_SRC
+
+* TESTING STRATEGY
+- *Unit Tests*: Test individual functions
+- *Integration Tests*: Test with actual LinkedIn (in dev environment)
+- *Error Simulation*: Test various failure scenarios
+- *Session Persistence*: Verify cookies work across script executions
+- *Security Tests*: Ensure no credential leakage
+
+* MONITORING & LOGGING
+- *Success Metrics*: Track successful logins
+- *Failure Metrics*: Monitor authentication failures
+- *Performance*: Track login duration
+- *Security Events*: Log unusual authentication patterns
+- *Session Duration*: Monitor how long sessions remain valid
+
+* MAINTENANCE CONSIDERATIONS
+- *LinkedIn UI Changes*: Selectors may need updates
+- *Security Updates*: LinkedIn may change authentication flow
+- *Cookie Expiration*: Monitor and adjust session refresh intervals
+- *Browser Updates*: Keep Puppeteer and Chrome versions current
