@@ -31,9 +31,15 @@ export async function randomScroll(page) {
   }, scrollAmount);
 }
 
-export async function humanLikeClick(page, selector) {
-  const element = await page.$(selector);
-  if (!element) throw new Error(`Element not found: ${selector}`);
+export async function humanLikeClick(page, selectorOrElement) {
+  let element;
+  
+  if (typeof selectorOrElement === 'string') {
+    element = await page.$(selectorOrElement);
+    if (!element) throw new Error(`Element not found: ${selectorOrElement}`);
+  } else {
+    element = selectorOrElement;
+  }
   
   const box = await element.boundingBox();
   const x = box.x + box.width * Math.random();

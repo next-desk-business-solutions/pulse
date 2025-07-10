@@ -5,6 +5,11 @@ export async function setupStealthMode(page) {
 
   await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
+  // Grant clipboard permissions using browser context
+  const context = page.browser().defaultBrowserContext();
+  await context.overridePermissions('https://www.linkedin.com', ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write']);
+  await context.overridePermissions('https://linkedin.com', ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write']);
+
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, 'plugins', { 
       get: () => [1, 2, 3, 4, 5] 
@@ -27,11 +32,15 @@ export async function setupStealthMode(page) {
     });
     
     const originalQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters) => (
-      parameters.name === 'notifications' ?
-        Promise.resolve({ state: 'default' }) :
-        originalQuery(parameters)
-    );
+    window.navigator.permissions.query = (parameters) => {
+      if (parameters.name === 'notifications') {
+        return Promise.resolve({ state: 'default' });
+      } else if (parameters.name === 'clipboard-read' || parameters.name === 'clipboard-write') {
+        return Promise.resolve({ state: 'granted' });
+      } else {
+        return originalQuery(parameters);
+      }
+    };
     
     window.chrome = {
       runtime: {},
@@ -47,6 +56,11 @@ export const stealthLaunchOptions = {
     '--disable-features=IsolateOrigins,site-per-process',
     '--disable-web-security',
     '--disable-features=IsolateOrigins',
-    '--disable-site-isolation-trials'
+    '--disable-site-isolation-trials',
+    '--enable-features=VaapiVideoDecoder',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--enable-features=ClipboardAPIRead,ClipboardAPIWrite'
   ]
 };
