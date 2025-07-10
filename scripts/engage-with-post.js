@@ -1,538 +1,357 @@
 import puppeteer from 'puppeteer';
-import { setupStealthMode, stealthLaunchOptions } from './utils/stealth.js';
-import { moveMouse, randomDelay, randomScroll, humanLikeClick } from './utils/human-behavior.js';
-import { loadCookies, validateSession, COOKIES_PATH } from './utils/cookie-manager.js';
+import { loadCookies } from './utils/cookie-manager.js';
+import { setupStealthMode } from './utils/stealth.js';
+import { humanLikeClick, randomScroll, randomDelay, moveMouse, randomPause } from './utils/human-behavior.js';
 
-async function findMostRecentPost(page, profileUrl) {
-  console.log('[PHASE2] Searching for recent posts...');
+const ENGAGEMENT_DELAY_MIN = parseInt(process.env.ENGAGEMENT_DELAY_MIN || '4000');
+const ENGAGEMENT_DELAY_MAX = parseInt(process.env.ENGAGEMENT_DELAY_MAX || '10000');
+const POST_DISCOVERY_TIMEOUT = parseInt(process.env.POST_DISCOVERY_TIMEOUT || '45000');
+
+async function waitForPageLoad(page) {
+  console.log('[PHASE2] Waiting for page to fully load...');
+  await randomDelay(3500, 5000);
   
-  await page.waitForTimeout(randomDelay(3000, 5000));
-  await randomScroll(page);
-  await page.waitForTimeout(randomDelay(2000, 3000));
-  
-  const postSelectors = [
-    '.feed-shared-update-v2',
-    '.feed-shared-post',
-    '.artdeco-card',
-    '[data-urn*="activity"]'
-  ];
-  
-  let posts = [];
-  const maxPostsToScan = parseInt(process.env.MAX_POSTS_TO_SCAN) || 5;
-  
-  for (const selector of postSelectors) {
-    try {
-      await page.waitForSelector(selector, { timeout: 10000 });
-      const foundPosts = await page.$$(selector);
-      
-      if (foundPosts.length > 0) {
-        console.log(`[PHASE2] Found ${foundPosts.length} potential posts with selector: ${selector}`);
-        posts = foundPosts.slice(0, maxPostsToScan);
-        break;
-      }
-    } catch (e) {
-      continue;
-    }
+  const isLoggedIn = await page.$('nav[aria-label="Primary Navigation"]');
+  if (!isLoggedIn) {
+    throw {
+      type: 'session_expired',
+      message: 'LinkedIn session has expired'
+    };
   }
   
-  if (posts.length === 0) {
-    return null;
+  console.log('[PHASE2] Waiting for posts to load...');
+  await page.waitForSelector('.feed-shared-update-v2', { timeout: 30000 });
+  await randomPause();
+}
+
+async function scrollWithAntiBot(page, scrollCount) {
+  await randomScroll(page, 'down');
+  
+  if (scrollCount % 5 === 0) {
+    await moveMouse(page);
+    await randomPause();
+  } else if (scrollCount % 3 === 0) {
+    await randomPause();
+  } else {
+    await randomPause();
   }
   
-  for (let i = 0; i < posts.length; i++) {
-    const post = posts[i];
-    let totalScrolledDown = 0;
+  if (Math.random() < 0.2) {
+    await moveMouse(page);
+    await randomPause();
+  }
+}
+
+async function findPostWithSendButton(page) {
+  console.log('[PHASE2] Searching for posts with send button...');
+  let scrollCount = 0;
+  const startTime = Date.now();
+  
+  while (Date.now() - startTime < POST_DISCOVERY_TIMEOUT) {
+    const sendButton = await page.$('button[aria-label="Send in a private message"]');
     
-    try {
-      const isShare = await post.$('.feed-shared-reshare');
-      if (isShare) {
-        console.log(`[PHASE2] Skipping shared post ${i + 1}`);
-        continue;
-      }
+    if (sendButton && await sendButton.isIntersectingViewport()) {
+      console.log('[PHASE2] Found send button in viewport');
       
-      console.log(`[PHASE2] Processing post ${i + 1} - getting post URL first`);
-      
-      let sendButton = null;
-      let modalVisible = false;
-      let scrollAttempts = 0;
-      const maxScrollAttempts = 10;
-      const scrollAmount = 200;
-      
-      sendButton = await post.$('button[aria-label*="Send in a private message"], .send-privately-button');
-      
-      while (!modalVisible && scrollAttempts < maxScrollAttempts) {
-        scrollAttempts++;
-        console.log(`[PHASE2] Scroll attempt ${scrollAttempts} - scrolling DOWN to find Send button...`);
-        
-        await page.evaluate((amount) => {
-          window.scrollBy({ top: amount, behavior: 'smooth' });
-        }, scrollAmount);
-        totalScrolledDown += scrollAmount;
-        await page.waitForTimeout(randomDelay(1000, 2000));
-        
-        sendButton = await post.$('button[aria-label*="Send in a private message"], .send-privately-button');
-        
-        if (sendButton) {
-          console.log(`[PHASE2] Found Send button after scrolling down ${totalScrolledDown}px, attempting to click...`);
-          
-          await humanLikeClick(page, sendButton);
-          console.log(`[PHASE2] Clicked Send button, waiting for modal...`);
-          
-          await page.waitForTimeout(randomDelay(2000, 4000));
-          
-          const modal = await page.$('[role="dialog"], .msg-overlay-bubble-header, .send-privately');
-          if (modal) {
-            console.log(`[PHASE2] Modal appeared successfully!`);
-            modalVisible = true;
-            break;
-          } else {
-            console.log(`[PHASE2] Modal did not appear, scrolling MORE...`);
-            sendButton = null;
-          }
-        } else {
-          console.log(`[PHASE2] Send button still not found, scrolling MORE...`);
+      const postContainer = await sendButton.evaluateHandle(el => {
+        let parent = el;
+        while (parent && !parent.classList?.contains('feed-shared-update-v2')) {
+          parent = parent.parentElement;
+        }
+        return parent;
+      });
+
+      if (postContainer) {
+        const likeButton = await postContainer.$('button.react-button__trigger');
+        if (likeButton) {
+          console.log('[PHASE2] Found like button in the same post');
+          return { sendButton, likeButton, scrollCount };
         }
       }
-      
-      let postUrl = null;
-      
-      if (modalVisible) {
-        const copyLinkClicked = await page.evaluate(() => {
-          const buttons = Array.from(document.querySelectorAll('button'));
-          const copyButton = buttons.find(button => 
-            button.textContent?.includes('Copy link to post') ||
-            button.getAttribute('aria-label')?.includes('Copy link')
-          );
-          
-          if (copyButton && typeof copyButton.click === 'function') {
-            copyButton.click();
-            return true;
-          }
-          return false;
-        });
-        
-        if (copyLinkClicked) {
-          console.log(`[PHASE2] Found and clicked copy link button, getting URL...`);
-          await page.waitForTimeout(randomDelay(1000, 2000));
-          
-          try {
-            let clipboardText = await page.evaluate(async () => {
-              return await navigator.clipboard.readText();
-            });
-            
-            if (!clipboardText || !clipboardText.includes('linkedin.com')) {
-              await page.waitForTimeout(1000);
-              clipboardText = await page.evaluate(async () => {
-                return await navigator.clipboard.readText();
-              });
-            }
-            
-            if (clipboardText && clipboardText.includes('linkedin.com')) {
-              postUrl = clipboardText.trim().split('\n')[0].split(' ')[0];
-              console.log(`[PHASE2] Successfully extracted post URL`);
-            }
-          } catch (e) {
-            console.log(`[PHASE2] Clipboard read failed: ${e.message}`);
-          }
-        } else {
-          console.log(`[PHASE2] Could not find copy link button`);
-        }
-        
-        await page.keyboard.press('Escape');
-        await page.waitForTimeout(randomDelay(500, 1000));
-      }
-      
-      // FAIL THE JOB IF NO URL WAS EXTRACTED
-      if (!postUrl || !postUrl.includes('linkedin.com')) {
-        console.log(`[PHASE2] FAILED - No valid post URL extracted, continuing to next post...`);
-        if (totalScrolledDown > 0) {
-          await page.evaluate((amount) => {
-            window.scrollBy({ top: -amount, behavior: 'smooth' });
-          }, totalScrolledDown);
-        }
-        continue;
-      }
-      
-      if (totalScrolledDown > 0) {
-        console.log(`[PHASE2] Scrolling back up ${totalScrolledDown}px to extract content...`);
-        await page.evaluate((amount) => {
-          window.scrollBy({ top: -amount, behavior: 'smooth' });
-        }, totalScrolledDown);
-        await page.waitForTimeout(randomDelay(1000, 2000));
-      }
-      
-      const postContent = await extractPostContent(page, post);
-      
-      if (postContent.text && postContent.text.trim().length > 0) {
-        console.log(`[PHASE2] Found post with content: ${postContent.text.substring(0, 100)}...`);
-        
-        return { 
-          element: post, 
-          url: postUrl || `${profileUrl}/recent-activity/`,
-          content: postContent 
-        };
-      } else {
-        console.log(`[PHASE2] Post ${i + 1} found but no extractable text content`);
-      }
-      
-    } catch (e) {
-      console.log(`[PHASE2] Error processing post ${i + 1}: ${e.message}`);
-      
-      if (totalScrolledDown > 0) {
-        await page.evaluate((amount) => {
-          window.scrollBy({ top: -amount, behavior: 'smooth' });
-        }, totalScrolledDown);
-      }
-      continue;
     }
+
+    scrollCount++;
+    await scrollWithAntiBot(page, scrollCount);
+    console.log(`[PHASE2] Scrolled ${scrollCount} times`);
+  }
+  
+  throw {
+    type: 'no_posts_found',
+    message: 'No posts with send button found'
+  };
+}
+
+async function likePost(page, likeButton) {
+  const isLiked = await likeButton.evaluate(el => 
+    el.getAttribute('aria-pressed') === 'true' || 
+    el.classList.contains('react-button--active')
+  );
+
+  if (!isLiked) {
+    console.log('[PHASE2] Liking the post...');
+    await moveMouse(page);
+    await randomPause();
+    await humanLikeClick(page, likeButton);
+    await randomPause();
+    console.log('[PHASE2] Post liked successfully');
+    await randomPause();
+    await moveMouse(page);
+  } else {
+    console.log('[PHASE2] Post already liked');
+    await randomPause();
+  }
+  
+  return !isLiked;
+}
+
+async function clickSendButton(page, sendButton) {
+   console.log('[PHASE2] Ensuring send button is clickable...');
+  await sendButton.scrollIntoViewIfNeeded();
+   
+  console.log('[PHASE2] Clicking send button...');
+  await moveMouse(page);
+  await randomPause();
+  
+  try {
+    await sendButton.click();
+  } catch (clickError) {
+    console.log('[PHASE2] Direct click failed, trying humanLikeClick...');
+    await humanLikeClick(page, sendButton);
+  }
+  
+  await randomPause();
+  
+  console.log('[PHASE2] Waiting for share modal to appear...');
+  try {
+    await page.waitForSelector('.artdeco-modal', { timeout: 10000 });
+    console.log('[PHASE2] Share modal appeared');
+  } catch (error) {
+    console.error('[PHASE2] Share modal did not appear - send button click may have failed');
+    throw {
+      type: 'modal_not_found',
+      message: 'Share modal did not appear after clicking send button'
+    };
+  }
+}
+
+async function copyPostUrl(page) {
+  await randomPause();
+  await moveMouse(page);
+  
+  await page.evaluate(() => {
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const copyBtn = buttons.find(btn => btn.textContent.includes('Copy link to post'));
+    if (copyBtn) {
+      copyBtn.setAttribute('data-copy-link-button', 'true');
+    }
+  });
+  
+  const copyButton = await page.$('button[data-copy-link-button="true"]');
+  
+  if (copyButton) {
+    console.log('[PHASE2] Copy link button found, clicking...');
+    await randomPause();
+    await moveMouse(page);
+    await randomPause();
+    await humanLikeClick(page, copyButton);
+    await randomPause();
+    
+    const postUrl = await page.evaluate(async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        return text;
+      } catch (err) {
+        console.error('Failed to read clipboard:', err);
+        return null;
+      }
+    });
+
+    console.log('[PHASE2] Post URL copied:', postUrl);
+    
+    await randomPause();
+    await moveMouse(page);
+    await randomPause();
+    
+    await page.keyboard.press('Escape');
+    await randomPause();
+    
+    return postUrl;
   }
   
   return null;
 }
 
-async function extractPostContent(page, postElement) {
-  const content = {};
+async function scrollBackUp(page, scrollCount) {
+  await moveMouse(page);
+  await randomPause();
   
-  try {
-    const expandSelectors = [
-      'button[aria-label*="see more"]',
-      'button[aria-label*="more"]',
-      '.feed-shared-inline-show-more-text__see-more-less-toggle',
-      '.feed-shared-text__see-more-less-toggle'
-    ];
+  console.log(`[PHASE2] Scrolling back up ${scrollCount} times...`);
+  for (let i = 0; i < scrollCount; i++) {
+    await randomScroll(page, 'up');
+    await randomPause();
     
-    for (const selector of expandSelectors) {
-      try {
-        const expandButton = await postElement.$(selector);
-        if (expandButton) {
-          console.log(`[PHASE2] Found expand button, clicking to show full content...`);
-          await expandButton.click();
-          await page.waitForTimeout(randomDelay(1000, 2000));
-          break;
-        }
-      } catch (e) {
-        continue;
-      }
+    if (i % 10 === 0 && i > 0) {
+      await moveMouse(page);
+      await randomPause();
     }
-    
-    const textSelectors = [
-      '.feed-shared-text__text-view',
-      '.feed-shared-update-v2__description',
-      '.feed-shared-text',
-      '.attributed-text-segment-list__content'
-    ];
-    
-    for (const selector of textSelectors) {
-      try {
-        const textElement = await postElement.$(selector);
-        if (textElement) {
-          content.text = await page.evaluate(el => el.textContent?.trim(), textElement);
-          if (content.text) break;
-        }
-      } catch (e) {
-        continue;
-      }
-    }
-    
-    try {
-      const timestampElement = await postElement.$('time, .feed-shared-actor__sub-description time');
-      if (timestampElement) {
-        content.publishedDate = await page.evaluate(el => 
-          el.textContent?.trim() || el.getAttribute('datetime'), timestampElement);
-      }
-    } catch (e) {
-      content.publishedDate = 'Unknown';
-    }
-    
-    content.postType = 'text';
-    content.hasMedia = false;
-    
-    if (await postElement.$('.feed-shared-image, .feed-shared-mini-update-v2--image, .update-components-image')) {
-      content.postType = 'image';
-      content.hasMedia = true;
-    } else if (await postElement.$('.feed-shared-video, .feed-shared-mini-update-v2--video, .update-components-video')) {
-      content.postType = 'video';
-      content.hasMedia = true;
-    } else if (await postElement.$('.feed-shared-article')) {
-      content.postType = 'article';
-    } else if (await postElement.$('.feed-shared-poll')) {
-      content.postType = 'poll';
-    } else if (await postElement.$('.feed-shared-certification, .feed-shared-mini-update-v2--certification')) {
-      content.postType = 'certification';
-    } else if (await postElement.$('.feed-shared-achievement, .feed-shared-mini-update-v2--achievement')) {
-      content.postType = 'achievement';
-    }
-    
-    console.log(`[PHASE2] Detected post type: ${content.postType}`);
-    
-    if (content.hasMedia) {
-      try {
-        const mediaDescElement = await postElement.$('.feed-shared-image__description, .visually-hidden');
-        if (mediaDescElement) {
-          content.mediaDescription = await page.evaluate(el => el.textContent?.trim(), mediaDescElement);
-        }
-      } catch (e) {
-        content.mediaDescription = 'Media description not available';
-      }
-    }
-    
-    try {
-      const likesElement = await postElement.$('.social-counts-reactions__count, .feed-shared-social-action-bar__reaction-count');
-      const commentsElement = await postElement.$('[aria-label*="comment"], .feed-shared-social-action-bar__comment-count');
-      const sharesElement = await postElement.$('[aria-label*="share"], .feed-shared-social-action-bar__share-count');
-      
-      content.engagementStats = {
-        likes: likesElement ? await page.evaluate(el => {
-          const text = el.textContent?.trim() || '0';
-          return parseInt(text.replace(/[^\d]/g, '')) || 0;
-        }, likesElement) : 0,
-        comments: commentsElement ? await page.evaluate(el => {
-          const text = el.textContent?.trim() || '0';
-          return parseInt(text.replace(/[^\d]/g, '')) || 0;
-        }, commentsElement) : 0,
-        shares: sharesElement ? await page.evaluate(el => {
-          const text = el.textContent?.trim() || '0';
-          return parseInt(text.replace(/[^\d]/g, '')) || 0;
-        }, sharesElement) : 0
-      };
-    } catch (e) {
-      content.engagementStats = { likes: 0, comments: 0, shares: 0 };
-    }
-    
-  } catch (error) {
-    console.log(`[PHASE2] Error extracting post content: ${error.message}`);
-  }
-  
-  return content;
-}
-
-async function likePost(page, postElement) {
-  console.log('[PHASE2] Attempting to like post...');
-  
-  try {
-    const likeSelectors = [
-      'button[aria-label*="Like"]',
-      'button[data-control-name="like"]',
-      '.feed-shared-social-action-bar__action-button[aria-pressed="false"]',
-      '.social-action[aria-label*="Like"]'
-    ];
-    
-    let likeButton = null;
-    for (const selector of likeSelectors) {
-      likeButton = await postElement.$(selector);
-      if (likeButton) break;
-    }
-    
-    if (!likeButton) {
-      return { liked: false, alreadyLiked: false, error: 'Like button not found' };
-    }
-    
-    const isAlreadyLiked = await page.evaluate(button => {
-      return button.getAttribute('aria-pressed') === 'true' ||
-             button.classList.contains('active') ||
-             button.getAttribute('aria-label')?.includes('Unlike');
-    }, likeButton);
-    
-    if (isAlreadyLiked) {
-      console.log('[PHASE2] Post already liked');
-      return { liked: true, alreadyLiked: true };
-    }
-    
-    await moveMouse(page);
-    await page.waitForTimeout(randomDelay(1000, 2000));
-    
-    await page.evaluate(button => {
-      button.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, likeButton);
-    
-    await page.waitForTimeout(randomDelay(500, 1000));
-    
-    await humanLikeClick(page, likeButton);
-    
-    await page.waitForTimeout(randomDelay(2000, 3000));
-    
-    const likeSuccess = await page.evaluate(button => {
-      return button.getAttribute('aria-pressed') === 'true' ||
-             button.classList.contains('active') ||
-             button.getAttribute('aria-label')?.includes('Unlike');
-    }, likeButton);
-    
-    if (likeSuccess) {
-      console.log('[PHASE2] Post liked successfully');
-      return { liked: true, alreadyLiked: false };
-    } else {
-      return { liked: false, alreadyLiked: false, error: 'Like action may have failed' };
-    }
-    
-  } catch (error) {
-    console.log(`[PHASE2] Error liking post: ${error.message}`);
-    return { liked: false, alreadyLiked: false, error: error.message };
   }
 }
 
-async function engageWithPost() {
-  const profileUrl = process.argv[2];
-  
-  if (!profileUrl) {
+async function extractPostContent(page) {
+  console.log('[PHASE2] Extracting post content...');
+  return await page.evaluate(() => {
+    const sendButton = document.querySelector('button[aria-label="Send in a private message"]');
+    if (!sendButton) return null;
+
+    let postContainer = sendButton.closest('.feed-shared-update-v2');
+    if (!postContainer) return null;
+
+    const textElement = postContainer.querySelector('.update-components-text');
+    const postText = textElement ? textElement.innerText.trim() : '';
+
+    const authorElement = postContainer.querySelector('.update-components-actor__title');
+    const authorName = authorElement ? authorElement.innerText.trim() : '';
+
+    const timeElement = postContainer.querySelector('.update-components-actor__sub-description');
+    const publishedDate = timeElement ? timeElement.innerText.split('•')[0].trim() : '';
+
+    const reactionsElement = postContainer.querySelector('.social-details-social-counts__reactions-count');
+    const reactions = reactionsElement ? parseInt(reactionsElement.innerText.replace(/,/g, '')) : 0;
+
+    const commentsElement = postContainer.querySelector('[aria-label*="comments"]');
+    const comments = commentsElement ? parseInt(commentsElement.innerText.match(/\d+/)?.[0] || '0') : 0;
+
+    const repostsElement = postContainer.querySelector('[aria-label*="reposts"]');
+    const reposts = repostsElement ? parseInt(repostsElement.innerText.match(/\d+/)?.[0] || '0') : 0;
+
+    const hasImage = !!postContainer.querySelector('.update-components-image');
+    const hasVideo = !!postContainer.querySelector('.update-components-video');
+    
     return {
-      status: 'error',
-      message: 'Profile URL is required',
-      errorType: 'invalid_input',
-      requiresManualIntervention: false
+      text: postText,
+      author: authorName,
+      publishedDate: publishedDate,
+      engagementStats: {
+        likes: reactions,
+        comments: comments,
+        shares: reposts
+      },
+      postType: hasVideo ? 'video' : hasImage ? 'image' : 'text',
+      hasMedia: hasImage || hasVideo
     };
-  }
-  
-  if (!profileUrl.includes('linkedin.com/in/')) {
-    return {
-      status: 'error',
-      message: 'Invalid LinkedIn profile URL format',
-      errorType: 'invalid_input',
-      requiresManualIntervention: false,
-      profileUrl
-    };
-  }
-  
-  const browser = await puppeteer.launch({
-    headless: process.env.PUPPETEER_HEADLESS === 'true',
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-    args: stealthLaunchOptions.args
   });
+}
+
+async function engageWithPost(profileUrl) {
+  console.log('[PHASE2] Starting post engagement process');
+  console.log(`[PHASE2] Target profile: ${profileUrl}`);
+  
+  let browser;
 
   try {
-    const page = await browser.newPage();
-    
-    await setupStealthMode(page);
-    await page.setViewport({ width: 1280, height: 600 });
-    
-    await page.evaluate(async () => {
-      try {
-        await navigator.clipboard.writeText('');
-      } catch (e) {
-        // Ignore errors
-      }
+    browser = await puppeteer.launch({
+      headless: false,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-web-security'
+      ]
     });
+
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 500 });
+    await setupStealthMode(page);
     
     const cookiesLoaded = await loadCookies(page);
-    
     if (!cookiesLoaded) {
-      return {
-        status: 'error',
-        message: 'No session cookies found - login required',
-        errorType: 'session_expired',
-        requiresManualIntervention: false,
-        profileUrl
+      throw new Error('Failed to load session cookies');
+    }
+
+    console.log('[PHASE2] Navigating directly to recent activity...');
+    const activityUrl = profileUrl.endsWith('/') ? 
+      `${profileUrl}recent-activity/all/` : 
+      `${profileUrl}/recent-activity/all/`;
+    
+    await page.goto(activityUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await waitForPageLoad(page);
+
+    const { sendButton, likeButton, scrollCount } = await findPostWithSendButton(page);
+    const wasLiked = await likePost(page, likeButton);
+    await clickSendButton(page, sendButton);
+    const postUrl = await copyPostUrl(page);
+    await scrollBackUp(page, scrollCount);
+    const postContent = await extractPostContent(page);
+
+    if (!postContent) {
+      throw {
+        type: 'content_extraction_failed',
+        message: 'Failed to extract post content'
       };
     }
-    
-    const activityUrl = profileUrl.endsWith('/') 
-      ? `${profileUrl}recent-activity/all/`
-      : `${profileUrl}/recent-activity/all/`;
-    
-    console.log(`[PHASE2] Navigating to activity page: ${activityUrl}`);
-    
-    await page.goto(activityUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000
-    });
-    
-    await page.waitForTimeout(randomDelay(2000, 3000));
-    const currentUrl = await page.url();
-    
-    if (currentUrl.includes('/login') || currentUrl.includes('/uas/login')) {
-      return {
-        status: 'error',
-        message: 'Session expired - redirected to login',
-        errorType: 'session_expired',
-        requiresManualIntervention: false,
-        profileUrl
-      };
-    }
-    
-    const postData = await findMostRecentPost(page, profileUrl);
-    
-    if (!postData) {
-      return {
-        status: 'error',
-        message: 'No recent posts found on profile',
-        errorType: 'no_posts_found',
-        requiresManualIntervention: true,
-        profileUrl,
-        partialData: {
-          postsFound: 0,
-          profileAccessible: true
-        }
-      };
-    }
-    
-    console.log(`[PHASE2] Using extracted post content...`);
-    
-    const postContent = postData.content;
-    
-    if (!postContent.text) {
-      return {
-        status: 'error',
-        message: 'Could not extract post text content',
-        errorType: 'extraction_failed',
-        requiresManualIntervention: true,
-        profileUrl,
-        partialData: {
-          postUrl: postData.url,
-          postType: postContent.postType
-        }
-      };
-    }
-    
-    const postElement = postData.element;
-    
-    const likeResult = await likePost(page, postElement);
-    
-    await moveMouse(page);
-    await page.waitForTimeout(randomDelay(2000, 4000));
-    
-    console.log(`[PHASE2] Post engagement completed`);
-    
+
+    console.log('[PHASE2] Post engagement completed successfully');
+
     return {
       status: 'success',
-      profileUrl,
-      likedPostUrl: postData.url,
+      profileUrl: profileUrl,
+      likedPostUrl: postUrl || 'URL copy failed',
       postContent: postContent.text,
       postMetadata: {
-        author: 'Profile Owner',
+        author: postContent.author,
         publishedDate: postContent.publishedDate,
         postType: postContent.postType,
         engagementStats: postContent.engagementStats,
         hasMedia: postContent.hasMedia,
-        mediaDescription: postContent.mediaDescription || null
+        mediaDescription: ''
       },
-      actionsTaken: likeResult,
+      actionsTaken: {
+        liked: wasLiked,
+        alreadyLiked: !wasLiked
+      },
       timestamp: new Date().toISOString()
     };
-    
+
   } catch (error) {
-    console.error(`[PHASE2] Error engaging with post: ${error.message}`);
+    console.error('[PHASE2] Error during post engagement:', error);
     
-    let errorType = 'unknown';
-    if (error.message.includes('timeout') || error.message.includes('Navigation timeout')) {
+    let errorType = error.type || 'unknown';
+    if (error.name === 'TimeoutError') {
       errorType = 'network';
-    } else if (error.message.includes('net::')) {
-      errorType = 'network';
-    } else if (error.message.includes('rate') || error.message.includes('limit')) {
-      errorType = 'rate_limit';
     }
-    
+    const requiresManualIntervention = ['session_expired', 'captcha', 'no_posts_found'].includes(errorType);
+
     return {
       status: 'error',
-      message: `Post engagement failed: ${error.message}`,
-      errorType,
-      requiresManualIntervention: errorType === 'network' ? false : true,
-      profileUrl
+      message: error.message || 'Unexpected error during post engagement',
+      errorType: errorType,
+      requiresManualIntervention: requiresManualIntervention,
+      profileUrl: profileUrl,
+      partialData: {
+        postsFound: 0,
+        profileAccessible: true
+      }
     };
   } finally {
-    await browser.close();
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 
-engageWithPost().then(result => {
-  console.log(JSON.stringify(result, null, 2));
-  process.exit(result.status === 'success' ? 0 : 1);
-});
+// Command line execution
+if (process.argv[2]) {
+  const profileUrl = process.argv[2];
+  engageWithPost(profileUrl)
+    .then(result => {
+      console.log(JSON.stringify(result, null, 2));
+      process.exit(result.status === 'success' ? 0 : 1);
+    })
+    .catch(error => {
+      console.error('Fatal error:', error);
+      process.exit(1);
+    });
+}
+
+export { engageWithPost };
