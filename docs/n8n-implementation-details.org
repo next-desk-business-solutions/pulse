@@ -1,0 +1,411 @@
+#+TITLE: n8n Implementation Details
+#+AUTHOR: Melbourne Baldove
+#+DATE: 2025-07-16
+
+* Architecture Overview
+
+** Current Infrastructure
+- *Host*: newton (NixOS)
+- *Network*: 10.0.1.0/24 (newton:2)
+- *Existing Services*:
+  - Twenty CRM: port 3000 → crm.workwithnextdesk.com
+  - Ghost CMS: port 8080 → cms.workwithnextdesk.com  
+  - Outline Wiki: port 3001 → wiki.workwithnextdesk.com
+  - PostgreSQL: twenty-db-1 (shared)
+  - Redis: twenty-redis-1 (shared)
+
+** n8n Integration
+- *Port*: 5678 (standard n8n port)
+- *Domain*: n8n.workwithnextdesk.com
+- *Database*: Shared PostgreSQL with separate n8n database
+- *Cache*: Shared Redis instance
+- *Project Access*: Volume mount ~/nextdesk/pulse for workflow scripts
+
+* Configuration Files
+
+** 1. Arion Compose Configuration
+#+begin_src nix
+# File: ~/nextdesk/pulse/arion-compose.nix
+{ pkgs, lib ? pkgs.lib, config ? null, ... }:
+
+let
+  defaultConfig = {
+    port = 5678;
+    url = "https://n8n.workwithnextdesk.com";
+    database = {
+      host = "twenty-db-1";
+      port = 5432;
+      user = "postgres";
+      password = "postgres";
+      database = "n8n";
+    };
+    redis = {
+      host = "twenty-redis-1";
+      port = 6379;
+    };
+    # ... additional config
+  };
+  
+  cfg = lib.recursiveUpdate defaultConfig (if config != null then config else {});
+in
+{
+  project.name = "n8n";
+  
+  networks.default.external = false;
+  networks.twenty = {
+    external = true;
+  };
+
+  services = {
+    n8n = {
+      service = {
+        image = "n8nio/n8n:latest";
+        ports = [ "${toString cfg.port}:${toString cfg.port}" ];
+        
+        volumes = [
+          "n8n-data:/home/node/.n8n"
+          "/Users/melbournebaldove/nextdesk/pulse:/workspace/pulse:ro"
+        ];
+        
+        environment = {
+          # Database configuration
+          DB_TYPE = "postgresdb";
+          DB_POSTGRESDB_HOST = cfg.database.host;
+          DB_POSTGRESDB_PORT = toString cfg.database.port;
+          DB_POSTGRESDB_DATABASE = cfg.database.database;
+          DB_POSTGRESDB_USER = cfg.database.user;
+          
+          # Redis configuration
+          REDIS_URL = "redis://${cfg.redis.host}:${toString cfg.redis.port}";
+          
+          # n8n configuration
+          N8N_HOST = "0.0.0.0";
+          N8N_PORT = toString cfg.port;
+          N8N_PROTOCOL = "https";
+          WEBHOOK_URL = cfg.url;
+          
+          # Security
+          N8N_BASIC_AUTH_ACTIVE = "true";
+          N8N_SECURE_COOKIE = "true";
+          
+          # Node.js configuration
+          NODE_ENV = "production";
+          NODE_FUNCTION_ALLOW_EXTERNAL = "axios,fs,path,child_process";
+        };
+        
+        env_file = ["/run/n8n/env"];
+        networks = ["default" "twenty"];
+        restart = "always";
+      };
+    };
+  };
+
+  docker-compose.volumes = {
+    n8n-data = {};
+  };
+}
+#+end_src
+
+** 2. Modified Pulse Flake
+#+begin_src nix
+# File: ~/nextdesk/pulse/flake.nix additions
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
+    arion = {
+      url = "github:hercules-ci/arion";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = { self, nixpkgs, flake-utils, arion }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs {
+          inherit system;
+          config.allowUnfree = true;
+        };
+      in
+      {
+        # Existing devShells.default...
+        
+        # Add n8n deployment
+        packages.n8n-deployment = arion.lib.build {
+          inherit pkgs;
+          modules = [
+            (import ./arion-compose.nix { inherit pkgs; })
+          ];
+        };
+        
+        apps.deploy-n8n = {
+          type = "app";
+          program = "${self.packages.${system}.n8n-deployment}/bin/arion";
+        };
+      });
+}
+#+end_src
+
+** 3. NixOS Module
+#+begin_src nix
+# File: ~/.dotfiles/modules/system/linux/n8n.nix
+{ config, lib, pkgs, inputs, ... }:
+
+with lib;
+
+{
+  options.services.n8n = {
+    enable = mkEnableOption "n8n workflow automation";
+    
+    url = mkOption {
+      type = types.str;
+      default = "https://n8n.workwithnextdesk.com";
+      description = "Public URL of the n8n instance";
+    };
+    
+    port = mkOption {
+      type = types.port;
+      default = 5678;
+      description = "Port to expose n8n on";
+    };
+    
+    # Additional options for database, auth, etc.
+  };
+
+  config = mkIf config.services.n8n.enable {
+    virtualisation.docker.enable = true;
+    virtualisation.arion.backend = "docker";
+    
+    users.users.melbournebaldove.extraGroups = [ "docker" ];
+    
+    # Secrets configuration
+    age.secrets = {
+      n8n-db-password = {
+        file = ../../../secrets/n8n-db-password.age;
+        mode = "0400";
+      };
+      n8n-encryption-key = {
+        file = ../../../secrets/n8n-encryption-key.age;
+        mode = "0400";
+      };
+      n8n-basic-auth-password = {
+        file = ../../../secrets/n8n-basic-auth-password.age;
+        mode = "0400";
+      };
+    };
+    
+    # Systemd service configuration
+    systemd.services.n8n = {
+      serviceConfig = {
+        RuntimeDirectory = "n8n";
+        RuntimeDirectoryMode = "0700";
+      };
+      
+      preStart = ''
+        # Create environment file with secrets
+        {
+          echo "DB_POSTGRESDB_PASSWORD=$(cat ${config.age.secrets.n8n-db-password.path})"
+          echo "N8N_ENCRYPTION_KEY=$(cat ${config.age.secrets.n8n-encryption-key.path})"
+          echo "N8N_BASIC_AUTH_PASSWORD=$(cat ${config.age.secrets.n8n-basic-auth-password.path})"
+        } > /run/n8n/env
+      '';
+    };
+    
+    # Arion project configuration
+    virtualisation.arion.projects.n8n = {
+      serviceName = "n8n";
+      settings = {
+        imports = [
+          (import "${inputs.pulse}/arion-compose.nix" {
+            inherit pkgs lib;
+            config = config.services.n8n;
+          })
+        ];
+      };
+    };
+  };
+}
+#+end_src
+
+** 4. Nginx Configuration
+#+begin_src nix
+# File: ~/.dotfiles/hosts/newton/nginx.nix addition
+virtualHosts = {
+  # ... existing hosts ...
+  
+  "n8n.workwithnextdesk.com" = {
+    enableACME = true;
+    forceSSL = true;
+    
+    locations."/" = {
+      proxyPass = "http://localhost:5678";
+      proxyWebsockets = true;
+      extraConfig = ''
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_buffering off;
+        
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Increase timeouts for long-running workflows
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+      '';
+    };
+  };
+};
+#+end_src
+
+* Pulse Project Integration
+
+** Volume Mounting Strategy
+- Mount ~/nextdesk/pulse as /workspace/pulse (read-only)
+- n8n workflows can execute: =bun run <script>= from /workspace/pulse
+- Access to all pulse scripts: login, view-profile, engage-post
+
+** Workflow Examples
+*** LinkedIn Login Workflow
+#+begin_src javascript
+// n8n Code node
+const { exec } = require('child_process');
+const util = require('util');
+const execAsync = util.promisify(exec);
+
+try {
+  const result = await execAsync('cd /workspace/pulse && bun run login', {
+    cwd: '/workspace/pulse',
+    env: { ...process.env, NODE_ENV: 'production' }
+  });
+  
+  return {
+    success: true,
+    output: result.stdout,
+    error: result.stderr
+  };
+} catch (error) {
+  return {
+    success: false,
+    error: error.message
+  };
+}
+#+end_src
+
+*** Profile Viewing Workflow
+#+begin_src javascript
+// n8n Code node with parameters
+const { exec } = require('child_process');
+const util = require('util');
+const execAsync = util.promisify(exec);
+
+const profileUrl = $input.first().json.profileUrl;
+
+try {
+  const result = await execAsync(`cd /workspace/pulse && bun run view-profile "${profileUrl}"`, {
+    cwd: '/workspace/pulse',
+    env: { ...process.env, NODE_ENV: 'production' }
+  });
+  
+  return {
+    success: true,
+    profile: profileUrl,
+    output: result.stdout
+  };
+} catch (error) {
+  return {
+    success: false,
+    error: error.message
+  };
+}
+#+end_src
+
+* Security Considerations
+
+** Secret Management
+- Database passwords via agenix
+- n8n encryption key for credential storage
+- Basic auth credentials for n8n access
+- All secrets mounted read-only in containers
+
+** Network Security
+- n8n exposed only through nginx reverse proxy
+- SSL/TLS termination at nginx
+- Internal container network isolation
+- Firewall rules for port 5678 (internal only)
+
+** Access Controls
+- Basic authentication for n8n web interface
+- Read-only access to pulse project files
+- Restricted Node.js modules (configurable)
+- Webhook URL validation
+
+* Deployment Instructions
+
+** 1. Create Secrets
+#+begin_src bash
+# Create required secrets
+agenix -e secrets/n8n-db-password.age
+agenix -e secrets/n8n-encryption-key.age
+agenix -e secrets/n8n-basic-auth-password.age
+#+end_src
+
+** 2. Deploy Configuration
+#+begin_src bash
+# From dotfiles directory
+deploy .#newton
+#+end_src
+
+** 3. Start n8n Service
+#+begin_src bash
+# On newton host
+sudo systemctl start n8n
+sudo systemctl enable n8n
+#+end_src
+
+** 4. Verify Deployment
+- Check n8n accessibility: https://n8n.workwithnextdesk.com
+- Test pulse project access in workflows
+- Verify database connectivity
+
+* Monitoring Integration
+
+** Grafana Dashboard
+- n8n container metrics
+- Workflow execution statistics
+- Database connection health
+- Pulse script execution metrics
+
+** Prometheus Metrics
+- n8n service availability
+- Response times
+- Error rates
+- Resource usage
+
+* Troubleshooting
+
+** Common Issues
+- Database connection errors
+- Volume mount permissions
+- Network connectivity
+- SSL certificate issues
+
+** Debug Commands
+#+begin_src bash
+# Check container status
+docker ps | grep n8n
+
+# View logs
+docker logs n8n-n8n-1
+
+# Check database connection
+docker exec n8n-n8n-1 node -e "console.log('DB test')"
+
+# Test pulse access
+docker exec n8n-n8n-1 ls -la /workspace/pulse
+#+end_src

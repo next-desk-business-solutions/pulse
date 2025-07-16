@@ -1,0 +1,77 @@
+#+TITLE: n8n Deployment Configuration Plan
+#+AUTHOR: Melbourne Baldove
+#+DATE: 2025-07-16
+
+* Overview
+Create a complete n8n deployment configuration that integrates with the existing NixOS infrastructure on newton, using arion-compose for container orchestration and nginx for reverse proxy.
+
+* Components to Create
+
+** 1. n8n Arion Compose Configuration
+- *File*: ~/nextdesk/pulse/arion-compose.nix
+- *Pattern*: Based on outline.nix and n8n Docker Compose examples
+- *Features*:
+  - PostgreSQL database integration (reuse existing Twenty's PostgreSQL)
+  - Redis integration (reuse existing Twenty's Redis)  
+  - Volume mounts for pulse project access (enable bun commands usage)
+  - Environment variable configuration for n8n
+  - Network configuration to connect with existing services
+
+** 2. Modified Pulse Flake
+- *File*: ~/nextdesk/pulse/flake.nix
+- *Changes*:
+  - Add arion as input dependency
+  - Wrap the arion-compose configuration
+  - Maintain existing bun development environment
+  - Add n8n deployment capabilities
+
+** 3. n8n NixOS Module
+- *File*: ~/.dotfiles/modules/system/linux/n8n.nix
+- *Pattern*: Similar structure to outline.nix module
+- *Features*:
+  - Configure secrets management with agenix
+  - Service configuration with systemd
+  - Database and Redis connection settings
+  - Authentication and security options
+
+** 4. Nginx Configuration Update
+- *File*: ~/.dotfiles/hosts/newton/nginx.nix
+- *Changes*:
+  - Add n8n virtual host (e.g., n8n.workwithnextdesk.com)
+  - SSL/TLS configuration with ACME
+  - Proxy configuration for n8n (default port 5678)
+  - WebSocket support for real-time features
+
+** 5. Implementation Documentation
+- *File*: ~/nextdesk/pulse/docs/n8n-deployment.md
+- *Content*:
+  - Architecture overview
+  - Configuration details
+  - Deployment instructions
+  - Integration with pulse project workflows
+
+* Key Features
+- *Pulse Integration*: Volume mount pulse project directory for workflow access to bun commands
+- *Database Reuse*: Connect to existing PostgreSQL and Redis from Twenty deployment
+- *Security*: Encrypted secrets management with agenix
+- *SSL/TLS*: Automatic certificate management via ACME
+- *Monitoring*: Integration with existing Grafana/Prometheus stack
+- *Development*: Maintain existing bun development environment
+
+* Deployment Flow
+1. Deploy arion configuration from pulse project
+2. Configure secrets on newton host
+3. Update nginx configuration
+4. Enable n8n service on newton
+5. Verify connectivity and pulse project access
+
+* Notes
+This approach follows the established patterns in the codebase while providing n8n with access to the pulse project for workflow automation.
+
+* TODO List
+- [ ] Create n8n arion-compose configuration
+- [ ] Modify pulse flake.nix to include arion configuration
+- [ ] Create n8n NixOS module similar to outline.nix
+- [ ] Configure nginx proxy for n8n
+- [ ] Create implementation documentation
+- [ ] Test deployment and pulse project integration

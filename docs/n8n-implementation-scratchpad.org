@@ -1,0 +1,37 @@
+#+TITLE: n8n Implementation Scratchpad
+#+AUTHOR: Melbourne Baldove
+#+DATE: 2025-07-16
+
+* Implementation Log
+
+** 2025-07-16 - Starting Implementation
+- Created deployment plan and implementation details
+- Beginning implementation of n8n configuration
+- Following established patterns from outline.nix
+- Note: Timezone should be UTC, not America/New_York
+- Note: Don't add resource limits to docker containers
+- ✓ Created arion-compose.nix with n8n configuration
+- ✓ Modified pulse flake.nix to include arion (host-managed deployment)
+- ✓ Created n8n NixOS module (modules/system/linux/n8n.nix)
+- ✓ Added nginx configuration for n8n.workwithnextdesk.com
+- ✓ Fixed pulseProjectPath to use flake input instead of hardcoded path
+- ✓ Added pulse input to dotfiles flake.nix
+- ✓ Added n8n secrets to secrets.nix
+
+** Implementation Complete
+All components have been created and configured. The n8n deployment is ready for the following deployment steps:
+
+1. Create the actual secret files using agenix:
+   - `agenix -e secrets/n8n-encryption-key.age`
+   - `agenix -e secrets/n8n-db-password.age`
+   - `agenix -e secrets/n8n-basic-auth-password.age`
+
+2. Deploy to newton:
+   - `deploy .#newton`
+
+3. Verify deployment:
+   - Check https://n8n.workwithnextdesk.com
+   - Test pulse project access in workflows
+   - Verify database connectivity
+
+The implementation follows the established patterns from outline.nix and integrates with the existing infrastructure including shared PostgreSQL and Redis instances.
