@@ -5,7 +5,7 @@ import { loadCookies, saveCookies, validateSession, COOKIES_PATH } from './utils
 
 async function login() {
   const browser = await puppeteer.launch({
-    headless: process.env.PUPPETEER_HEADLESS === 'true',
+    headless: process.env.PUPPETEER_HEADLESS !== 'false',
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
     args: stealthLaunchOptions.args
   });
@@ -20,11 +20,11 @@ async function login() {
     const cookiesLoaded = await loadCookies(page);
     
     if (cookiesLoaded) {
-      console.log('[LOGIN] Checking existing session...');
+      console.error('[LOGIN] Checking existing session...');
       const sessionValid = await validateSession(page);
       
       if (sessionValid) {
-        console.log('[LOGIN] Session valid, already logged in');
+        console.error('[LOGIN] Session valid, already logged in');
         return {
           status: 'success',
           message: 'Already logged in with existing session',
@@ -34,7 +34,7 @@ async function login() {
       }
     }
     
-    console.log('[LOGIN] Navigating to LinkedIn login page...');
+    console.error('[LOGIN] Navigating to LinkedIn login page...');
     await page.goto('https://www.linkedin.com/login', {
       waitUntil: 'networkidle2'
     });
@@ -49,7 +49,7 @@ async function login() {
       throw new Error('LinkedIn credentials not found in environment variables');
     }
     
-    console.log('[LOGIN] Entering credentials...');
+    console.error('[LOGIN] Entering credentials...');
     await humanLikeType(page, '#username', email);
     
     await page.waitForTimeout(randomDelay(1000, 2000));
@@ -59,10 +59,10 @@ async function login() {
     
     await page.waitForTimeout(randomDelay(1000, 2000));
     
-    console.log('[LOGIN] Submitting login form...');
+    console.error('[LOGIN] Submitting login form...');
     await page.click('button[type="submit"]');
     
-    console.log('[LOGIN] Waiting for login to process...');
+    console.error('[LOGIN] Waiting for login to process...');
     await page.waitForTimeout(randomDelay(3000, 5000));
     
     try {
@@ -77,7 +77,7 @@ async function login() {
       
       // Check for security checkpoint
       if (currentUrl.includes('/checkpoint/') || await page.$('[data-js-module-id="challenge"]')) {
-        console.log('[LOGIN] Security checkpoint detected');
+        console.error('[LOGIN] Security checkpoint detected');
         await saveCookies(page);
         return {
           status: 'error',
@@ -90,7 +90,7 @@ async function login() {
       // Check if login form disappeared (successful login)
       const hasLoginForm = await page.$('#username');
       if (!hasLoginForm || !currentUrl.includes('/login')) {
-        console.log('[LOGIN] Login appears successful, saving session...');
+        console.error('[LOGIN] Login appears successful, saving session...');
         await saveCookies(page);
         return {
           status: 'success',
@@ -101,7 +101,7 @@ async function login() {
       }
       
       // Fallback: save cookies anyway for manual verification
-      console.log('[LOGIN] Login state unclear, saving cookies...');
+      console.error('[LOGIN] Login state unclear, saving cookies...');
       await saveCookies(page);
       return {
         status: 'error',
@@ -111,7 +111,7 @@ async function login() {
       };
       
     } catch (error) {
-      console.log('[LOGIN] Login processing error, saving cookies anyway...');
+      console.error('[LOGIN] Login processing error, saving cookies anyway...);
       await saveCookies(page);
       return {
         status: 'error',

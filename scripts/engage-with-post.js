@@ -8,7 +8,7 @@ const ENGAGEMENT_DELAY_MAX = parseInt(process.env.ENGAGEMENT_DELAY_MAX || '10000
 const POST_DISCOVERY_TIMEOUT = parseInt(process.env.POST_DISCOVERY_TIMEOUT || '45000');
 
 async function waitForPageLoad(page) {
-  console.log('[PHASE2] Waiting for page to fully load...');
+  console.error('[PHASE2] Waiting for page to fully load...');
   await randomDelay(3500, 5000);
   
   const isLoggedIn = await page.$('nav[aria-label="Primary Navigation"]');
@@ -19,8 +19,15 @@ async function waitForPageLoad(page) {
     };
   }
   
-  console.log('[PHASE2] Waiting for posts to load...');
-  await page.waitForSelector('.feed-shared-update-v2', { timeout: 30000 });
+  console.error('[PHASE2] Waiting for posts to load...');
+  try {
+    await page.waitForSelector('.feed-shared-update-v2', { timeout: 10000 });
+  } catch (error) {
+    throw {
+      type: 'no_posts',
+      message: 'No posts found on profile activity page'
+    };
+  }
   await randomPause();
 }
 
@@ -43,7 +50,7 @@ async function scrollWithAntiBot(page, scrollCount) {
 }
 
 async function findPostWithSendButton(page) {
-  console.log('[PHASE2] Searching for posts with send button...');
+  console.error('[PHASE2] Searching for posts with send button...');
   let scrollCount = 0;
   const startTime = Date.now();
   
@@ -51,7 +58,7 @@ async function findPostWithSendButton(page) {
     const sendButton = await page.$('button[aria-label="Send in a private message"]');
     
     if (sendButton && await sendButton.isIntersectingViewport()) {
-      console.log('[PHASE2] Found send button in viewport');
+      console.error('[PHASE2] Found send button in viewport');
       
       const postContainer = await sendButton.evaluateHandle(el => {
         let parent = el;
@@ -64,7 +71,7 @@ async function findPostWithSendButton(page) {
       if (postContainer) {
         const likeButton = await postContainer.$('button.react-button__trigger');
         if (likeButton) {
-          console.log('[PHASE2] Found like button in the same post');
+          console.error('[PHASE2] Found like button in the same post');
           return { sendButton, likeButton, scrollCount };
         }
       }
@@ -72,7 +79,7 @@ async function findPostWithSendButton(page) {
 
     scrollCount++;
     await scrollWithAntiBot(page, scrollCount);
-    console.log(`[PHASE2] Scrolled ${scrollCount} times`);
+    console.error(`[PHASE2] Scrolled ${scrollCount} times`);
   }
   
   throw {
@@ -88,16 +95,16 @@ async function likePost(page, likeButton) {
   );
 
   if (!isLiked) {
-    console.log('[PHASE2] Liking the post...');
+    console.error('[PHASE2] Liking the post...');
     await moveMouse(page);
     await randomPause();
     await humanLikeClick(page, likeButton);
     await randomPause();
-    console.log('[PHASE2] Post liked successfully');
+    console.error('[PHASE2] Post liked successfully');
     await randomPause();
     await moveMouse(page);
   } else {
-    console.log('[PHASE2] Post already liked');
+    console.error('[PHASE2] Post already liked');
     await randomPause();
   }
   
@@ -105,26 +112,26 @@ async function likePost(page, likeButton) {
 }
 
 async function clickSendButton(page, sendButton) {
-   console.log('[PHASE2] Ensuring send button is clickable...');
+   console.error('[PHASE2] Ensuring send button is clickable...');
   await sendButton.scrollIntoViewIfNeeded();
    
-  console.log('[PHASE2] Clicking send button...');
+  console.error('[PHASE2] Clicking send button...');
   await moveMouse(page);
   await randomPause();
   
   try {
     await sendButton.click();
   } catch (clickError) {
-    console.log('[PHASE2] Direct click failed, trying humanLikeClick...');
+    console.error('[PHASE2] Direct click failed, trying humanLikeClick...');
     await humanLikeClick(page, sendButton);
   }
   
   await randomPause();
   
-  console.log('[PHASE2] Waiting for share modal to appear...');
+  console.error('[PHASE2] Waiting for share modal to appear...');
   try {
     await page.waitForSelector('.artdeco-modal', { timeout: 10000 });
-    console.log('[PHASE2] Share modal appeared');
+    console.error('[PHASE2] Share modal appeared');
   } catch (error) {
     console.error('[PHASE2] Share modal did not appear - send button click may have failed');
     throw {
@@ -149,7 +156,7 @@ async function copyPostUrl(page) {
   const copyButton = await page.$('button[data-copy-link-button="true"]');
   
   if (copyButton) {
-    console.log('[PHASE2] Copy link button found, clicking...');
+    console.error('[PHASE2] Copy link button found, clicking...');
     await randomPause();
     await moveMouse(page);
     await randomPause();
@@ -166,7 +173,7 @@ async function copyPostUrl(page) {
       }
     });
 
-    console.log('[PHASE2] Post URL copied:', postUrl);
+    console.error('[PHASE2] Post URL copied:', postUrl);
     
     await randomPause();
     await moveMouse(page);
@@ -185,7 +192,7 @@ async function scrollBackUp(page, scrollCount) {
   await moveMouse(page);
   await randomPause();
   
-  console.log(`[PHASE2] Scrolling back up ${scrollCount} times...`);
+  console.error(`[PHASE2] Scrolling back up ${scrollCount} times...`);
   for (let i = 0; i < scrollCount; i++) {
     await randomScroll(page, 'up');
     await randomPause();
@@ -198,7 +205,7 @@ async function scrollBackUp(page, scrollCount) {
 }
 
 async function extractPostContent(page) {
-  console.log('[PHASE2] Extracting post content...');
+  console.error('[PHASE2] Extracting post content...');
   return await page.evaluate(() => {
     const sendButton = document.querySelector('button[aria-label="Send in a private message"]');
     if (!sendButton) return null;
@@ -243,14 +250,14 @@ async function extractPostContent(page) {
 }
 
 async function engageWithPost(profileUrl) {
-  console.log('[PHASE2] Starting post engagement process');
-  console.log(`[PHASE2] Target profile: ${profileUrl}`);
+  console.error('[PHASE2] Starting post engagement process');
+  console.error(`[PHASE2] Target profile: ${profileUrl}`);
   
   let browser;
 
   try {
     browser = await puppeteer.launch({
-      headless: false,
+      headless: process.env.PUPPETEER_HEADLESS !== 'false',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -261,7 +268,7 @@ async function engageWithPost(profileUrl) {
     });
 
     const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 500 });
+    await page.setViewport({ width: 1280, height: 800 });
     await setupStealthMode(page);
     
     const cookiesLoaded = await loadCookies(page);
@@ -269,7 +276,7 @@ async function engageWithPost(profileUrl) {
       throw new Error('Failed to load session cookies');
     }
 
-    console.log('[PHASE2] Navigating directly to recent activity...');
+    console.error('[PHASE2] Navigating directly to recent activity...');
     const activityUrl = profileUrl.endsWith('/') ? 
       `${profileUrl}recent-activity/all/` : 
       `${profileUrl}/recent-activity/all/`;
@@ -291,7 +298,7 @@ async function engageWithPost(profileUrl) {
       };
     }
 
-    console.log('[PHASE2] Post engagement completed successfully');
+    console.error('[PHASE2] Post engagement completed successfully');
 
     return {
       status: 'success',
@@ -349,7 +356,7 @@ if (process.argv[2]) {
       process.exit(result.status === 'success' ? 0 : 1);
     })
     .catch(error => {
-      console.error('Fatal error:', error);
+      console.error('[PHASE2] Fatal error:', error);
       process.exit(1);
     });
 }
