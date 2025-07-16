@@ -35,3 +35,17 @@ All components have been created and configured. The n8n deployment is ready for
    - Verify database connectivity
 
 The implementation follows the established patterns from outline.nix and integrates with the existing infrastructure including shared PostgreSQL and Redis instances.
+
+** 2025-07-16 - Deployment Complete
+- ✓ Committed n8n changes to pulse repository
+- ✓ Created and pushed pulse repository to GitHub
+- ✓ Updated pulse flake input in dotfiles
+- ✓ Committed and pushed dotfiles with n8n configuration
+- ❌ Deployment failed: Option conflict with NixOS built-in n8n service
+- ERROR: services.n8n.enable already declared in NixOS modules
+
+** 2025-07-16 - Switching to Native NixOS n8n Service
+- Remove custom n8n.nix module
+- Remove arion-compose configuration
+- Use built-in NixOS n8n service with database configuration
+- Configure pulse project access via systemd service overrides

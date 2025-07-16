@@ -1,0 +1,386 @@
+#+TITLE: Phase 2: Post Engagement Implementation Plan
+#+AUTHOR: Melbourne Baldove
+#+DATE: 2025-07-10
+#+PROPERTY: header-args :tangle yes
+
+* OVERVIEW
+This document outlines the detailed implementation plan for Phase 2 of the LinkedIn Lead Warmer workflow. Phase 2 focuses on engaging with the lead's most recent post by liking it and generating contextual comments for human review and posting.
+
+* PHASE 2 OBJECTIVE
+Engage with the lead's most recent post by liking it, generating a comment with an LLM, and creating a Linear task for a human to review and post the comment.
+
+* SCRIPT REQUIREMENTS
+
+** Required Script: `engage-with-post.js`
+
+*** Function
+- Navigate to a specified LinkedIn profile URL using existing session cookies
+- Locate and navigate to the most recent post by the lead
+- Extract post content, metadata, and engagement context
+- Like the post using human-like interaction patterns
+- Return structured data for LLM comment generation
+
+*** Input Parameters
+- `profileUrl` (string): Complete LinkedIn profile URL (e.g., "https://www.linkedin.com/in/username/")
+
+*** Output Format
+#+BEGIN_SRC json
+{
+  "status": "success" | "error",
+  "profileUrl": "https://www.linkedin.com/in/username/",
+  "likedPostUrl": "https://www.linkedin.com/feed/update/urn:li:activity:123456789/",
+  "postContent": "Original post text content...",
+  "postMetadata": {
+    "author": "Full Name",
+    "publishedDate": "2d ago",
+    "postType": "text" | "image" | "video" | "article" | "poll",
+    "engagementStats": {
+      "likes": 42,
+      "comments": 8,
+      "shares": 3
+    },
+    "hasMedia": false,
+    "mediaDescription": "Image description if applicable"
+  },
+  "actionsTaken": {
+    "liked": true,
+    "alreadyLiked": false
+  },
+  "timestamp": "2025-07-10T22:41:00.000Z"
+}
+#+END_SRC
+
+*** Error Response Format
+#+BEGIN_SRC json
+{
+  "status": "error",
+  "message": "Descriptive error message",
+  "errorType": "session_expired|rate_limit|no_posts_found|post_private|engagement_restricted|network|unknown",
+  "requiresManualIntervention": true|false,
+  "profileUrl": "https://www.linkedin.com/in/username/",
+  "partialData": {
+    "postsFound": 0,
+    "profileAccessible": true
+  }
+}
+#+END_SRC
+
+** Anti-Bot Implementation Requirements
+- Use existing stealth configuration from `utils/stealth.js`
+- Implement human-like behavior from `utils/human-behavior.js`
+- Load session cookies from `utils/cookie-manager.js`
+- Random delays between navigation steps (4-10 seconds)
+- Realistic scrolling patterns to find posts
+- Human-like clicking behavior for like actions
+- Occasional mouse movements and pauses
+
+** Session Management
+- Load cookies before navigation using `loadCookies()`
+- Detect session expiration by checking for login redirects
+- Return appropriate error codes for n8n workflow handling
+- Validate session before profile and post access
+
+** Post Discovery Strategy
+
+*** Navigation Flow
+1. Navigate to profile URL
+2. Scroll to activity/posts section
+3. Identify most recent post by the profile owner (not shares/reposts)
+4. Extract post URL and navigate to individual post view
+5. Perform engagement actions
+
+*** Post Type Detection
+- *Text Posts*: Plain text content
+- *Image Posts*: Text + image content with descriptions
+- *Video Posts*: Text + video content
+- *Article Posts*: Shared articles with commentary
+- *Poll Posts*: Interactive polls with options
+
+*** Content Extraction Methods
+- Primary post text content
+- Media descriptions and alt text
+- Engagement statistics
+- Post timestamp and metadata
+- Comment context (first few comments for tone)
+
+** Engagement Actions
+
+*** Like Implementation
+- Locate like button with fallback selectors
+- Check if already liked (avoid double-liking)
+- Perform human-like click with random coordinates
+- Verify like action success
+- Handle rate limiting or engagement restrictions
+
+*** Human-Like Interaction Patterns
+- Random delays before and after actions (2-8 seconds)
+- Mouse hover over post before clicking
+- Occasional scrolling within post content
+- Brief pause after like action
+- Random mouse movements between actions
+
+* N8N WORKFLOW INTEGRATION
+
+** Workflow Actions (n8n Orchestration)
+1. *Lead Retrieval*: Get leads ready for Phase 2 from database
+2. *Session Validation*: Ensure login session is active
+3. *Execute Script*: Run `engage-with-post.js` with profile URL
+4. *LLM Integration*: Generate contextual comment using extracted post data
+5. *Task Creation*: Create Linear task with generated comment for human review
+6. *CRM Update*: Update Twenty CRM with "Engaged with Post" status
+7. *Database Update*: Log engagement data and schedule Phase 3
+8. *Error Handling*: Manage failures and retry logic
+
+** Database Schema Updates (PostgreSQL)
+#+BEGIN_SRC sql
+-- Add Phase 2 columns to existing leads table
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS 
+  phase_2_completed_at TIMESTAMP,
+  phase_2_post_url VARCHAR(500),
+  phase_2_post_content TEXT,
+  phase_2_generated_comment TEXT,
+  phase_2_linear_task_id VARCHAR(100),
+  phase_3_scheduled_at TIMESTAMP;
+
+-- Create post engagement tracking table
+CREATE TABLE post_engagements (
+  id SERIAL PRIMARY KEY,
+  lead_id INTEGER REFERENCES leads(id),
+  post_url VARCHAR(500) NOT NULL,
+  post_content TEXT,
+  post_type VARCHAR(50),
+  engagement_stats JSONB,
+  actions_taken JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+#+END_SRC
+
+** LLM Integration (OpenAI/Gemini)
+
+*** Comment Generation Prompt Template
+#+BEGIN_SRC
+You are writing a professional, engaging comment for a LinkedIn post. 
+
+Context:
+- Post Author: {{author_name}}
+- Post Content: {{post_content}}
+- Post Type: {{post_type}}
+- Engagement Level: {{likes}} likes, {{comments}} comments
+
+Requirements:
+1. Keep comment under 100 words
+2. Be professional and genuine
+3. Add value or ask a thoughtful question
+4. Avoid generic responses like "Great post!"
+5. Reference specific details from the post
+6. Match the tone of the original post
+
+Generate a comment that would encourage meaningful engagement:
+#+END_SRC
+
+*** API Integration
+- *OpenAI*: Use GPT-4 for high-quality comment generation
+- *Gemini*: Alternative model for cost optimization
+- *Fallback Strategy*: Template-based comments if API unavailable
+- *Rate Limiting*: Handle API limits with exponential backoff
+
+** Linear Task Creation
+
+*** Task Template
+#+BEGIN_SRC
+**LinkedIn Comment Review - Phase 2**
+
+**Lead:** {{full_name}}
+**Profile:** {{profile_url}}
+**Post:** {{post_url}}
+
+**Original Post Content:**
+{{post_content}}
+
+**Generated Comment:**
+{{generated_comment}}
+
+**Instructions:**
+1. Review the generated comment for appropriateness
+2. Edit if necessary to match your voice/style
+3. Post the comment on LinkedIn
+4. Mark this task as complete
+5. Add any notes about the interaction
+
+**Engagement Stats:** {{likes}} likes, {{comments}} comments, {{shares}} shares
+**Post Type:** {{post_type}}
+**Date:** {{timestamp}}
+#+END_SRC
+
+*** Linear API Integration
+- *Endpoint*: POST `/api/v1/issues`
+- *Project*: LinkedIn Lead Warmer
+- *Labels*: ["phase-2", "comment-review", "linkedin"]
+- *Priority*: Medium
+- *Assignee*: Default team member or based on lead assignment
+
+** Twenty CRM Integration
+
+*** Contact Update
+- *Status*: "Engaged with Post"
+- *Activity Log*: Post engagement details
+- *Next Action*: "Review generated comment in Linear"
+- *Engagement Score*: Increment based on post interaction
+- *Tags*: Add ["phase-2-complete", "post-engaged"]
+
+*** Data Fields
+#+BEGIN_SRC json
+{
+  "status": "Engaged with Post",
+  "lastActivity": "{{timestamp}}",
+  "engagementData": {
+    "postUrl": "{{post_url}}",
+    "postType": "{{post_type}}",
+    "engagementStats": "{{engagement_stats}}",
+    "commentGenerated": true,
+    "linearTaskId": "{{task_id}}"
+  },
+  "nextPhaseScheduled": "{{phase_3_date}}"
+}
+#+END_SRC
+
+** Error Handling Strategy
+
+*** No Posts Found
+- *Action*: Log as manual review required
+- *Escalation*: Create Linear task for manual profile check
+- *CRM Update*: Mark as "No Recent Posts"
+- *Retry*: Skip to Phase 3 after delay
+
+*** Post Engagement Restrictions
+- *Private Posts*: Skip and log for manual review
+- *Company Posts*: Handle differently (lower engagement)
+- *Shared Content*: Find original posts by profile owner
+- *Engagement Limits*: Respect LinkedIn's interaction limits
+
+*** Rate Limiting Response
+- *Detection*: Monitor for engagement restriction messages
+- *Backoff*: Exponential delay (30min, 2hr, 8hr)
+- *Monitoring*: Track daily engagement quotas
+- *Adjustment*: Modify timing based on limits
+
+** Monitoring and Logging
+
+*** Success Metrics
+- Posts successfully found and engaged
+- Like actions completed successfully
+- Comment generation success rate
+- Linear task creation rate
+- Overall Phase 2 completion rate
+
+*** Logging Format
+All logs prefixed with `[PHASE2]` for filtering:
+#+BEGIN_SRC
+[PHASE2] Navigating to profile: https://linkedin.com/in/username
+[PHASE2] Found 3 recent posts, selecting most recent
+[PHASE2] Post liked successfully
+[PHASE2] Post content extracted: 245 characters
+[PHASE2] Rate limit detected, backing off for 30 minutes
+[PHASE2] No recent posts found, escalating for manual review
+#+END_SRC
+
+** Configuration Parameters
+
+*** Environment Variables
+#+BEGIN_SRC shell
+# Phase 2 specific settings
+PHASE_2_TO_3_DELAY_DAYS="2"          # Days to wait before Phase 3
+POST_DISCOVERY_TIMEOUT="45000"       # Milliseconds to find posts
+ENGAGEMENT_DELAY_MIN="4000"          # Minimum delay before engaging
+ENGAGEMENT_DELAY_MAX="10000"         # Maximum delay before engaging
+MAX_POSTS_TO_SCAN="5"               # Maximum posts to scan for recent content
+COMMENT_MAX_LENGTH="100"             # Maximum comment length for LLM
+ENGAGEMENT_RATE_LIMIT_DAILY="50"     # Daily engagement limit
+
+# LLM Configuration
+LLM_PROVIDER="openai"                # "openai" or "gemini"
+LLM_MODEL="gpt-4"                   # Model to use for comment generation
+LLM_TEMPERATURE="0.7"               # Creativity level for comments
+LLM_MAX_TOKENS="150"                # Maximum tokens for comment generation
+
+# Linear Configuration
+LINEAR_PROJECT_ID="project_123"      # Linear project for tasks
+LINEAR_DEFAULT_ASSIGNEE="user_456"   # Default assignee for tasks
+LINEAR_TASK_PRIORITY="2"            # Task priority (1-4)
+#+END_SRC
+
+* TESTING STRATEGY
+
+** Unit Tests
+- Post discovery and navigation
+- Content extraction from various post types
+- Like action implementation and verification
+- Error handling for different scenarios
+- LLM integration and comment generation
+
+** Integration Tests
+- End-to-end post engagement workflow
+- Database integration with PostgreSQL
+- Linear API task creation
+- Twenty CRM integration
+- LLM API integration with fallbacks
+
+** Manual Testing Scenarios
+- Profiles with recent text posts
+- Profiles with image/video posts
+- Profiles with no recent posts
+- Private or restricted posts
+- Rate limiting simulation
+- Session expiration during engagement
+
+* IMPLEMENTATION CHECKLIST
+
+** Script Development
+- [ ] Create `engage-with-post.js` with stealth configuration
+- [ ] Implement robust post discovery with fallbacks
+- [ ] Add like action with human-like behavior
+- [ ] Include comprehensive error handling
+- [ ] Add logging with [PHASE2] prefix
+- [ ] Test with various post types and profiles
+
+** Integration Components
+- [ ] Database schema updates for Phase 2 tracking
+- [ ] LLM integration for comment generation
+- [ ] Linear API integration for task creation
+- [ ] Twenty CRM integration for engagement tracking
+- [ ] Environment variable configuration
+- [ ] Rate limiting and quota management
+
+** Quality Assurance
+- [ ] Unit test coverage for all functions
+- [ ] Integration test with real LinkedIn posts
+- [ ] LLM comment quality validation
+- [ ] Performance testing under rate limits
+- [ ] Security validation (no credential exposure)
+- [ ] Documentation and troubleshooting guide
+
+* MAINTENANCE CONSIDERATIONS
+
+** LinkedIn Platform Changes
+- Monitor for UI layout changes affecting post discovery
+- Track changes in engagement button selectors
+- Update post type detection logic
+- Adjust timing parameters based on platform updates
+
+** LLM Model Updates
+- Monitor comment quality and adjust prompts
+- Update model versions and parameters
+- Implement A/B testing for different approaches
+- Track comment approval rates from human reviewers
+
+** Engagement Rate Optimization
+- Analyze optimal engagement timing patterns
+- Monitor success rates vs. engagement volume
+- Adjust daily limits based on account health
+- Implement adaptive strategies based on performance
+
+** Integration Maintenance
+- Monitor Linear API for changes
+- Update Twenty CRM integration as needed
+- Maintain database schema and optimize queries
+- Regular validation of all external integrations

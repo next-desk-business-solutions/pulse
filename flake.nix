@@ -4,13 +4,9 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    arion = {
-      url = "github:hercules-ci/arion";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, arion }:
+  outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -19,28 +15,12 @@
         };
       in
       {
-        # n8n deployment package
-        packages.n8n-deployment = arion.lib.build {
-          inherit pkgs;
-          modules = [
-            (import ./arion-compose.nix { inherit pkgs; })
-          ];
-        };
-        
-        # n8n deployment app
-        apps.deploy-n8n = {
-          type = "app";
-          program = "${self.packages.${system}.n8n-deployment}/bin/arion";
-        };
-        
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             bun
             postgresql_15
             n8n
             nodePackages.localtunnel
-            # Add arion for container deployment
-            arion.packages.${system}.arion
           ];
 
           shellHook = ''

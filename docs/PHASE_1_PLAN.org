@@ -1,0 +1,229 @@
+#+TITLE: Phase 1: Profile View Implementation Plan
+#+AUTHOR: Melbourne Baldove
+#+DATE: 2025-07-10
+#+PROPERTY: header-args :tangle yes
+
+* OVERVIEW
+This document outlines the detailed implementation plan for Phase 1 of the LinkedIn Lead Warmer workflow. Phase 1 focuses on making initial, subtle contact by viewing a lead's LinkedIn profile and gathering basic information for subsequent phases.
+
+* PHASE 1 OBJECTIVE
+Make initial, subtle contact by viewing the lead's profile and gathering basic information.
+
+* SCRIPT REQUIREMENTS
+
+** Required Script: `view-profile.js`
+
+*** Function
+- Navigate to a specified LinkedIn profile URL using existing session cookies
+- Extract the lead's full name and basic profile information
+- Handle various profile states (public, private, premium required)
+- Detect and handle session expiration
+
+*** Input Parameters
+- `profileUrl` (string): Complete LinkedIn profile URL (e.g., "https://www.linkedin.com/in/username/")
+
+*** Output Format
+#+BEGIN_SRC json
+{
+  "status": "success" | "error",
+  "viewedProfile": "https://www.linkedin.com/in/username/",
+  "fullName": "First Last",
+  "profileData": {
+    "headline": "Job Title at Company",
+    "location": "City, Country",
+    "isPublic": true,
+    "connectionDegree": "2nd" | "3rd" | "Out of network",
+    "premiumRequired": false
+  },
+  "timestamp": "2025-07-10T22:41:00.000Z"
+}
+#+END_SRC
+
+*** Error Response Format
+#+BEGIN_SRC json
+{
+  "status": "error",
+  "message": "Descriptive error message",
+  "errorType": "session_expired|rate_limit|profile_private|profile_not_found|network|unknown",
+  "requiresManualIntervention": true|false,
+  "profileUrl": "https://www.linkedin.com/in/username/"
+}
+#+END_SRC
+
+** Anti-Bot Implementation Requirements
+- Use existing stealth configuration from `utils/stealth.js`
+- Implement human-like behavior from `utils/human-behavior.js`
+- Load session cookies from `utils/cookie-manager.js`
+- Random delays between navigation and data extraction (3-8 seconds)
+- Simulate realistic scrolling patterns
+- Occasional mouse movements without clicks
+
+** Session Management
+- Load cookies before navigation using `loadCookies()`
+- Detect session expiration by checking for login redirects
+- Return appropriate error codes for n8n workflow handling
+- Validate session before profile access
+
+** Data Extraction Strategy
+
+*** Primary Information (Required)
+- Full name from profile header
+- Current headline/job title
+- Location information
+
+*** Secondary Information (Best Effort)
+- Connection degree indicator
+- Profile visibility status
+- Premium account requirements
+
+*** Extraction Methods
+- Use CSS selectors with fallbacks for different LinkedIn layouts
+- Handle dynamic content loading with appropriate waits
+- Gracefully handle missing information (partial profiles)
+
+* N8N WORKFLOW INTEGRATION
+
+** Workflow Actions (n8n Orchestration)
+1. *Input Validation*: Verify LinkedIn profile URL format
+2. *Session Check*: Ensure login session is active (call login.js if needed)
+3. *Execute Script*: Run `view-profile.js` with profile URL
+4. *Database Operations*: Create lead record in PostgreSQL
+5. *CRM Integration*: Update Twenty CRM with "Viewed Profile" status
+6. *Scheduling*: Set Phase 2 delay timer (configurable days)
+7. *Error Handling*: Log failures and determine retry strategy
+
+** Database Schema (PostgreSQL)
+#+BEGIN_SRC sql
+CREATE TABLE leads (
+  id SERIAL PRIMARY KEY,
+  profile_url VARCHAR(255) UNIQUE NOT NULL,
+  full_name VARCHAR(255),
+  headline VARCHAR(500),
+  location VARCHAR(255),
+  connection_degree VARCHAR(50),
+  current_phase INTEGER DEFAULT 1,
+  phase_1_completed_at TIMESTAMP,
+  phase_2_scheduled_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+#+END_SRC
+
+** Twenty CRM Integration
+- *Endpoint*: POST `/api/v1/contacts`
+- *Data Fields*:
+  - Full name
+  - LinkedIn URL
+  - Status: "Viewed Profile"
+  - Source: "LinkedIn Lead Warmer - Phase 1"
+  - Tags: ["lead-warmer", "phase-1"]
+
+** Error Handling Strategy
+
+*** Session Expired
+- *Action*: Call `login.js` to refresh session
+- *Retry*: Re-execute `view-profile.js` once
+- *Escalation*: Manual intervention if login fails
+
+*** Rate Limiting
+- *Action*: Exponential backoff (15min, 1hr, 4hr)
+- *Monitoring*: Track rate limit patterns
+- *Adjustment*: Modify timing between requests
+
+*** Profile Access Issues
+- *Private Profiles*: Log and skip to manual review
+- *Not Found*: Mark as invalid URL, remove from queue
+- *Network Issues*: Retry with standard backoff
+
+** Monitoring and Logging
+
+*** Success Metrics
+- Profile views completed successfully
+- Data extraction accuracy rate
+- Session persistence duration
+- Average execution time
+
+*** Logging Format
+All logs prefixed with `[PHASE1]` for filtering:
+#+BEGIN_SRC
+[PHASE1] Navigating to profile: https://linkedin.com/in/username
+[PHASE1] Profile data extracted successfully
+[PHASE1] Session expired, requesting login refresh
+[PHASE1] Rate limit detected, backing off for 15 minutes
+#+END_SRC
+
+** Configuration Parameters
+
+*** Environment Variables
+#+BEGIN_SRC shell
+# Phase 1 specific settings
+PHASE_1_TO_2_DELAY_DAYS="1"  # Days to wait before Phase 2
+PROFILE_VIEW_TIMEOUT="30000" # Milliseconds to wait for page load
+EXTRACTION_DELAY_MIN="3000"  # Minimum delay before extraction
+EXTRACTION_DELAY_MAX="8000"  # Maximum delay before extraction
+RATE_LIMIT_BACKOFF_MINUTES="15" # Initial backoff on rate limit
+#+END_SRC
+
+* TESTING STRATEGY
+
+** Unit Tests
+- Profile URL validation
+- Data extraction from various profile layouts
+- Error handling for different scenarios
+- Cookie loading and session validation
+
+** Integration Tests
+- End-to-end profile viewing workflow
+- Database integration with PostgreSQL
+- Twenty CRM API integration
+- Error recovery and retry mechanisms
+
+** Manual Testing Scenarios
+- Public profiles with complete information
+- Private or restricted profiles
+- Profiles with missing information
+- Rate limiting simulation
+- Session expiration handling
+
+* IMPLEMENTATION CHECKLIST
+
+** Script Development
+- [ ] Create `view-profile.js` with stealth configuration
+- [ ] Implement robust data extraction with fallbacks
+- [ ] Add comprehensive error handling
+- [ ] Include logging with [PHASE1] prefix
+- [ ] Test with various profile types
+
+** Integration Components
+- [ ] Database schema creation
+- [ ] Twenty CRM integration functions
+- [ ] n8n workflow nodes and error handling
+- [ ] Environment variable configuration
+- [ ] Monitoring and alerting setup
+
+** Quality Assurance
+- [ ] Unit test coverage for all functions
+- [ ] Integration test with real LinkedIn profiles
+- [ ] Performance testing under rate limits
+- [ ] Security validation (no credential exposure)
+- [ ] Documentation and runbook creation
+
+* MAINTENANCE CONSIDERATIONS
+
+** LinkedIn Platform Changes
+- Monitor for UI layout changes affecting selectors
+- Track API endpoint modifications
+- Update user agent strings regularly
+- Adjust timing parameters based on performance
+
+** Rate Limiting Adjustments
+- Analyze optimal request timing patterns
+- Implement adaptive backoff strategies
+- Monitor success rates and adjust accordingly
+- Consider proxy rotation if needed
+
+** Data Quality Monitoring
+- Track extraction accuracy over time
+- Identify and handle new profile layouts
+- Monitor for incomplete data patterns
+- Regular validation of extracted information

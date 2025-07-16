@@ -7,7 +7,8 @@
     "view-profile": "bun run scripts/view-profile.js",
     "engage-post": "bun run scripts/engage-with-post.js",
     "test": "bun test",
-    "test:login": "bun test test/login.integration.test.js"
+    "test:login": "bun test test/login.integration.test.js",
+    "n8n": "n8n start"
   },
   "dependencies": {
     "puppeteer": "^21.6.0"
