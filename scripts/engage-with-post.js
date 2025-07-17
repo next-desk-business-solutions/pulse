@@ -353,7 +353,7 @@ if (process.argv[2]) {
   engageWithPost(profileUrl)
     .then(result => {
       console.log(JSON.stringify(result, null, 2));
-      process.exit(result.status === 'success' ? 0 : 1);
+      process.exit(0);
     })
     .catch(error => {
       console.error('[PHASE2] Fatal error:', error);
