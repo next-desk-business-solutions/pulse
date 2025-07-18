@@ -5,6 +5,8 @@ import { loadCookies, saveCookies, validateSession, COOKIES_PATH } from './utils
 import fs from 'fs/promises';
 
 async function login() {
+  const waitForCaptcha = process.argv.includes('--wait-for-captcha');
+  
   const browser = await puppeteer.launch({
     headless: process.env.PUPPETEER_HEADLESS !== 'false',
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
@@ -213,22 +215,11 @@ async function login() {
       requiresManualIntervention: false
     };
   } finally {
-    // Only close browser if not keeping alive for CAPTCHA
-    const shouldClose = !this.keepAlive;
-    if (shouldClose) {
-      await browser.close();
-    }
+    await browser.close();
   }
 }
 
 login().then(result => {
   console.log(JSON.stringify(result, null, 2));
-  
-  // Keep process alive if CAPTCHA detected
-  if (!result.keepAlive) {
-    process.exit(0);
-  } else {
-    console.error('[LOGIN] Keeping browser session alive for manual CAPTCHA resolution');
-    console.error('[LOGIN] Browser will remain open until verify-captcha.js is run');
-  }
+  process.exit(0);
 });
