@@ -226,7 +226,11 @@ async function login() {
       await browser.close();
     } else {
       console.error('[LOGIN] Browser session kept alive for CAPTCHA resolution');
-      // Detach browser from Node.js process
+      // Detach browser process so it stays alive after Node.js exits
+      const browserProcess = browser.process();
+      if (browserProcess) {
+        browserProcess.unref();
+      }
       browser.disconnect();
     }
   }
