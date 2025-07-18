@@ -7,6 +7,7 @@ import path from 'path';
 
 async function login() {
   const waitForCaptcha = process.argv.includes('--wait-for-captcha');
+  let keepBrowserAlive = false;
   
   const browser = await puppeteer.launch({
     headless: process.env.PUPPETEER_HEADLESS !== 'false',
@@ -104,6 +105,7 @@ async function login() {
         
         // If not waiting for CAPTCHA, return immediately for n8n notification
         if (!waitForCaptcha) {
+          keepBrowserAlive = true;
           return {
             status: 'captcha_detected',
             message: 'CAPTCHA detected - manual intervention required',
@@ -220,11 +222,22 @@ async function login() {
       requiresManualIntervention: false
     };
   } finally {
-    await browser.close();
+    if (!keepBrowserAlive) {
+      await browser.close();
+    } else {
+      console.error('[LOGIN] Browser session kept alive for CAPTCHA resolution');
+    }
   }
 }
 
 login().then(result => {
   console.log(JSON.stringify(result, null, 2));
-  process.exit(0);
+  
+  // Only exit if not keeping browser alive
+  if (result.status !== 'captcha_detected' || process.argv.includes('--wait-for-captcha')) {
+    process.exit(0);
+  } else {
+    console.error('[LOGIN] Process kept alive for CAPTCHA resolution');
+    console.error('[LOGIN] Browser accessible at: ssh -L 9222:localhost:9222 your-server');
+  }
 });
