@@ -226,6 +226,8 @@ async function login() {
       await browser.close();
     } else {
       console.error('[LOGIN] Browser session kept alive for CAPTCHA resolution');
+      // Detach browser from Node.js process
+      browser.disconnect();
     }
   }
 }
@@ -233,11 +235,6 @@ async function login() {
 login().then(result => {
   console.log(JSON.stringify(result, null, 2));
   
-  // Only exit if not keeping browser alive
-  if (result.status !== 'captcha_detected' || process.argv.includes('--wait-for-captcha')) {
-    process.exit(0);
-  } else {
-    console.error('[LOGIN] Process kept alive for CAPTCHA resolution');
-    console.error('[LOGIN] Browser accessible at: ssh -L 9222:localhost:9222 your-server');
-  }
+  // Always exit - browser is detached and will stay alive
+  process.exit(0);
 });
