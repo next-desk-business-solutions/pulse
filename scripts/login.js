@@ -2,12 +2,9 @@ import puppeteer from 'puppeteer';
 import { setupStealthMode, stealthLaunchOptions } from './utils/stealth.js';
 import { humanLikeType, moveMouse, randomDelay } from './utils/human-behavior.js';
 import { loadCookies, saveCookies, validateSession, COOKIES_PATH } from './utils/cookie-manager.js';
-import fs from 'fs/promises';
-import path from 'path';
 
 async function login() {
   const waitForCaptcha = process.argv.includes('--wait-for-captcha');
-  let keepBrowserAlive = false;
   
   const browser = await puppeteer.launch({
     headless: process.env.PUPPETEER_HEADLESS !== 'false',
@@ -83,39 +80,16 @@ async function login() {
       // Check for security checkpoint
       if (currentUrl.includes('/checkpoint/') || await page.$('[data-js-module-id="challenge"]')) {
         console.error('[LOGIN] Security checkpoint detected');
-        
-        // Ensure data directory exists
-        const dataDir = path.join(process.cwd(), 'data');
-        await fs.mkdir(dataDir, { recursive: true });
-        
-        // Take screenshot for Slack notification
-        const screenshotPath = path.join(dataDir, `captcha-${Date.now()}.png`);
-        await page.screenshot({ path: screenshotPath, fullPage: true });
-        
-        // Save browser endpoint for reconnection
-        const wsEndpoint = browser.wsEndpoint();
-        const sessionFile = path.join(dataDir, 'browser-session.json');
-        await fs.writeFile(sessionFile, JSON.stringify({
-          wsEndpoint,
-          pageUrl: currentUrl,
-          timestamp: Date.now()
-        }));
-        
         await saveCookies(page);
         
         // If not waiting for CAPTCHA, return immediately for n8n notification
         if (!waitForCaptcha) {
-          keepBrowserAlive = true;
           return {
             status: 'captcha_detected',
             message: 'CAPTCHA detected - manual intervention required',
             errorType: 'captcha',
             requiresManualIntervention: true,
-            screenshotPath,
-            debuggingPort: 9222,
-            instructions: 'SSH tunnel: ssh -L 9222:localhost:9222 your-server, then open chrome://inspect',
-            sessionFile,
-            nextCommand: 'Run again with --wait-for-captcha flag after starting manual resolution'
+            instructions: 'Run again with --wait-for-captcha flag, then SSH tunnel: ssh -L 9222:localhost:9222 your-server and open chrome://inspect'
           };
         }
         
@@ -149,7 +123,6 @@ async function login() {
         }
         
         if (checkCount >= maxChecks) {
-          await fs.unlink(path.join(process.cwd(), 'data', 'browser-session.json')).catch(() => {});
           return {
             status: 'error',
             message: 'CAPTCHA timeout - exceeded 20 minutes',
@@ -159,7 +132,6 @@ async function login() {
         
         // CAPTCHA completed, save cookies
         await saveCookies(page);
-        await fs.unlink(path.join(process.cwd(), 'data', 'browser-session.json')).catch(() => {});
         
         const finalUrl = await page.url();
         if (!finalUrl.includes('/login') && !finalUrl.includes('/checkpoint/')) {
@@ -222,23 +194,11 @@ async function login() {
       requiresManualIntervention: false
     };
   } finally {
-    if (!keepBrowserAlive) {
-      await browser.close();
-    } else {
-      console.error('[LOGIN] Browser session kept alive for CAPTCHA resolution');
-      // Detach browser process so it stays alive after Node.js exits
-      const browserProcess = browser.process();
-      if (browserProcess) {
-        browserProcess.unref();
-      }
-      browser.disconnect();
-    }
+    await browser.close();
   }
 }
 
 login().then(result => {
   console.log(JSON.stringify(result, null, 2));
-  
-  // Always exit - browser is detached and will stay alive
   process.exit(0);
 });
