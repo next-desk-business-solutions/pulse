@@ -111,7 +111,7 @@ async function login() {
       };
       
     } catch (error) {
-      console.error('[LOGIN] Login processing error, saving cookies anyway...);
+      console.error('[LOGIN] Login processing error, saving cookies anyway...');
       await saveCookies(page);
       return {
         status: 'error',

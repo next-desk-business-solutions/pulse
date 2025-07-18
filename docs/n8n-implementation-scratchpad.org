@@ -45,7 +45,33 @@ The implementation follows the established patterns from outline.nix and integra
 - ERROR: services.n8n.enable already declared in NixOS modules
 
 ** 2025-07-16 - Switching to Native NixOS n8n Service
-- Remove custom n8n.nix module
-- Remove arion-compose configuration
-- Use built-in NixOS n8n service with database configuration
-- Configure pulse project access via systemd service overrides
+- ✓ Remove custom n8n.nix module
+- ✓ Remove arion-compose configuration
+- ✓ Use built-in NixOS n8n service with database configuration
+- ✓ Configure pulse project access via systemd service overrides
+- ✓ Updated pulse flake to remove arion dependencies
+- ✓ Configured systemd service with secrets and pulse access
+- ✓ Added n8n agenix secrets configuration to newton host
+- ❌ First deployment failed: preStart script issues
+- ✓ Fixed systemd service configuration and pulse access
+- ✓ Added n8n subdomain to Cloudflare DNS
+- ❌ Second deployment: n8n service still failing (resources error)
+
+** Next Steps Needed:
+1. Debug why n8n service is failing to start
+2. ✓ Check if PostgreSQL database "n8n" exists or needs creation
+   - Found: n8n database doesn't exist
+   - Solution: Added automatic database creation service
+3. Verify Redis connectivity to twenty-redis-1
+4. Test n8n service configuration
+5. Once service starts, verify https://n8n.workwithnextdesk.com access
+
+** 2025-07-16 - Database Creation Fix
+- ✓ Added systemd service n8n-db-init to automatically create n8n database
+- ✓ Service waits for PostgreSQL container and creates database if missing
+- ✓ Added service dependencies so n8n waits for database initialization
+
+** 2025-07-16 - Nginx Configuration Fix
+- ❌ Found nginx failing: "proxy_http_version" directive is duplicate
+- ✓ Fixed: Removed duplicate proxy_http_version (already set by recommendedProxySettings)
+- Root cause: ACME fails because nginx can't start due to config error
