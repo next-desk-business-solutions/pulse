@@ -3,6 +3,7 @@ import { setupStealthMode, stealthLaunchOptions } from './utils/stealth.js';
 import { humanLikeType, moveMouse, randomDelay } from './utils/human-behavior.js';
 import { loadCookies, saveCookies, validateSession, COOKIES_PATH } from './utils/cookie-manager.js';
 import fs from 'fs/promises';
+import path from 'path';
 
 async function login() {
   const waitForCaptcha = process.argv.includes('--wait-for-captcha');
@@ -82,13 +83,17 @@ async function login() {
       if (currentUrl.includes('/checkpoint/') || await page.$('[data-js-module-id="challenge"]')) {
         console.error('[LOGIN] Security checkpoint detected');
         
+        // Ensure data directory exists
+        const dataDir = path.join(process.cwd(), 'data');
+        await fs.mkdir(dataDir, { recursive: true });
+        
         // Take screenshot for Slack notification
-        const screenshotPath = `/data/captcha-${Date.now()}.png`;
+        const screenshotPath = path.join(dataDir, `captcha-${Date.now()}.png`);
         await page.screenshot({ path: screenshotPath, fullPage: true });
         
         // Save browser endpoint for reconnection
         const wsEndpoint = browser.wsEndpoint();
-        const sessionFile = '/data/browser-session.json';
+        const sessionFile = path.join(dataDir, 'browser-session.json');
         await fs.writeFile(sessionFile, JSON.stringify({
           wsEndpoint,
           pageUrl: currentUrl,
@@ -142,7 +147,7 @@ async function login() {
         }
         
         if (checkCount >= maxChecks) {
-          await fs.unlink('/data/browser-session.json').catch(() => {});
+          await fs.unlink(path.join(process.cwd(), 'data', 'browser-session.json')).catch(() => {});
           return {
             status: 'error',
             message: 'CAPTCHA timeout - exceeded 20 minutes',
@@ -152,7 +157,7 @@ async function login() {
         
         // CAPTCHA completed, save cookies
         await saveCookies(page);
-        await fs.unlink('/data/browser-session.json').catch(() => {});
+        await fs.unlink(path.join(process.cwd(), 'data', 'browser-session.json')).catch(() => {});
         
         const finalUrl = await page.url();
         if (!finalUrl.includes('/login') && !finalUrl.includes('/checkpoint/')) {
