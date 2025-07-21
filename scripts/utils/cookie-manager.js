@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-const COOKIES_PATH = '/tmp/pulse-cookies.json';
+const COOKIES_PATH = process.env.PULSE_COOKIES_PATH || '/var/lib/private/n8n/pulse-cookies.json';
 
 export async function loadCookies(page) {
   try {
