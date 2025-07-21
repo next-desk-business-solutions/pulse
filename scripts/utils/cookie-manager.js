@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-const COOKIES_PATH = path.join(process.cwd(), 'data', 'cookies.json');
+const COOKIES_PATH = '/tmp/pulse-cookies.json';
 
 export async function loadCookies(page) {
   try {
@@ -16,7 +16,6 @@ export async function loadCookies(page) {
 
 export async function saveCookies(page) {
   const cookies = await page.cookies();
-  await fs.mkdir(path.dirname(COOKIES_PATH), { recursive: true });
   await fs.writeFile(COOKIES_PATH, JSON.stringify(cookies, null, 2));
 }
 
